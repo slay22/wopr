@@ -6,6 +6,11 @@ export type RunOptions = {
   resumeRunID: string
   keepRunDir: boolean
   modelOverride: string
+  humanReview: boolean
+  emulatorID: string
+  appRunCommand: string
+  interactiveModel: string
+  interactiveVariant: string
   maxAttempts: number
   baseRef: string
   targetDir: string
@@ -16,6 +21,7 @@ export type Phase = {
   name: string
   agentName: string
   model: string
+  variant?: string
   description: string
   inputFiles: readonly string[]
   inputDiff: boolean

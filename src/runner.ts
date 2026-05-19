@@ -6,6 +6,7 @@ import type { FilePartInput, OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import { opencodeConfig } from "./agents"
 import { fileParts } from "./attachments"
 import { addAllAndCommit, createCleanRepoSnapshot, ensureRepoReady, restoreRepoSnapshot, type RepoSnapshot, writeDiff } from "./git"
+import { runHumanReviewGate } from "./human"
 import { log } from "./log"
 import { startOpencode } from "./opencode"
 import { phases } from "./phases"
@@ -37,9 +38,10 @@ export async function run(options: RunOptions) {
         continue
       }
       await runPhase(opencode.client, workspace, phase, options, extraFiles)
+      if (phase.name === "implementer") await runHumanReviewGate(workspace, options, opencode.url)
     }
 
-    await writeSummary(workspace, phases.map((phase) => phase.name))
+    await writeSummary(workspace, summaryReportNames(options.humanReview))
   } catch (error) {
     runErr = error
     throw error
@@ -74,9 +76,11 @@ async function runPhase(
 type PreparedPhaseRun = {
   attachments: FilePartInput[]
   prompt: string
-  model: { providerID: string; modelID: string }
+  model: ModelSelection
   maxAttempts: number
 }
+
+type ModelSelection = { providerID: string; modelID: string; variant?: string }
 
 async function preparePhaseRun(workspace: Workspace, phase: Phase, options: RunOptions, extraFiles: FilePartInput[]): Promise<PreparedPhaseRun> {
   const inputs = [...phase.inputFiles]
@@ -90,7 +94,7 @@ async function preparePhaseRun(workspace: Workspace, phase: Phase, options: RunO
   const phaseFiles = await fileParts(inputs, workspace.dir, "skip")
   const attachments = [...phaseFiles, ...extraFiles]
   const prompt = buildPhasePrompt(workspace, phase)
-  const model = parseModel(options.modelOverride || phase.model)
+  const model = selectedModel(phase, options.modelOverride)
   const maxAttempts = Math.max(1, options.maxAttempts)
 
   return { attachments, prompt, model, maxAttempts }
@@ -111,7 +115,7 @@ async function runPhaseWithRetries(
   let lastError: unknown
 
   for (let attempt = 1; attempt <= prepared.maxAttempts; attempt++) {
-    log.info(`[${phase.name}] attempt ${attempt}/${prepared.maxAttempts} with ${prepared.model.providerID}/${prepared.model.modelID}`)
+    log.info(`[${phase.name}] attempt ${attempt}/${prepared.maxAttempts} with ${formatModel(prepared.model)}`)
     try {
       return await runPhaseAttempt(client, workspace, phase, targetDir, prepared, attempt)
     } catch (error) {
@@ -209,7 +213,7 @@ async function promptPhase(
     workspace: Workspace
     targetDir: string
     prompt: string
-    model: { providerID: string; modelID: string }
+    model: ModelSelection
     attachments: FilePartInput[]
   },
 ) {
@@ -224,7 +228,8 @@ async function promptPhase(
     sessionID: session.data.id,
     directory: input.targetDir,
     agent: input.phase.agentName,
-    model: input.model,
+    model: { providerID: input.model.providerID, modelID: input.model.modelID },
+    variant: input.model.variant,
     parts: [...input.attachments, { type: "text", text: input.prompt }],
   })
 
@@ -264,9 +269,24 @@ export function parseModel(value: string) {
   return { providerID, modelID }
 }
 
+function selectedModel(phase: Phase, override: string): ModelSelection {
+  const model = parseModel(override || phase.model)
+  if (override || !phase.variant) return model
+  return { ...model, variant: phase.variant }
+}
+
+function formatModel(model: ModelSelection) {
+  const base = `${model.providerID}/${model.modelID}`
+  return model.variant ? `${base}#${model.variant}` : base
+}
+
 export function shouldSkip(name: string, options: Pick<RunOptions, "onlyPhases" | "skipPhases">) {
   if (options.onlyPhases.length > 0) return !options.onlyPhases.includes(name)
   return options.skipPhases.includes(name)
+}
+
+function summaryReportNames(includeHumanReview: boolean) {
+  return phases.flatMap((phase) => (phase.name === "implementer" && includeHumanReview ? [phase.name, "human-review"] : [phase.name]))
 }
 
 class LoggedAttemptError extends Error {}

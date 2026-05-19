@@ -30,7 +30,7 @@ describe("cli parsing", () => {
   })
 
   test("requires prompt unless resuming", async () => {
-    await expect(parseCommand([])).rejects.toThrow("hace falta un prompt")
+    await expect(parseCommand([])).rejects.toThrow("need a prompt")
 
     const command = await parseCommand(["--resume", "20260519-103045-x7q2"])
     expect(command.type).toBe("run")
@@ -39,5 +39,26 @@ describe("cli parsing", () => {
 
   test("rejects invalid max attempts", () => {
     expect(() => parseArgs(["--max-attempts", "0", "prompt"])).toThrow("--max-attempts")
+  })
+
+  test("parses human review flags", () => {
+    const parsed = parseArgs([
+      "--human-review",
+      "--emulator",
+      "Pixel_8",
+      "--app-run-command",
+      "flutter run -d emulator-5554",
+      "--interactive-model",
+      "openai/gpt-5.5-pro",
+      "--interactive-variant",
+      "xhigh",
+      "prompt",
+    ])
+
+    expect(parsed.humanReview).toBe(true)
+    expect(parsed.emulatorID).toBe("Pixel_8")
+    expect(parsed.appRunCommand).toBe("flutter run -d emulator-5554")
+    expect(parsed.interactiveModel).toBe("openai/gpt-5.5-pro")
+    expect(parsed.interactiveVariant).toBe("xhigh")
   })
 })

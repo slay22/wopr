@@ -1,10 +1,15 @@
 import type { Phase } from "./types"
 
+export const defaultGptModel = "openai/gpt-5.5"
+export const defaultGptVariant = "xhigh"
+export const defaultOpusModel = "anthropic/claude-opus-4-7"
+
 export const phases = [
   {
     name: "implementer",
     agentName: "implementer",
-    model: "anthropic/claude-opus-4-7",
+    model: defaultGptModel,
+    variant: defaultGptVariant,
     description: "Implements the feature described in the PRD",
     inputFiles: ["prd.md"],
     inputDiff: false,
@@ -13,7 +18,8 @@ export const phases = [
   {
     name: "patterns",
     agentName: "pattern-auditor",
-    model: "anthropic/claude-opus-4-7",
+    model: defaultGptModel,
+    variant: defaultGptVariant,
     description: "Audits patterns and best practices, applies refactoring",
     inputFiles: ["prd.md", "reports/implementer.md"],
     inputDiff: true,
@@ -22,7 +28,8 @@ export const phases = [
   {
     name: "security",
     agentName: "security-auditor",
-    model: "anthropic/claude-sonnet-4-6",
+    model: defaultGptModel,
+    variant: defaultGptVariant,
     description: "Audits security and applies fixes",
     inputFiles: ["prd.md", "reports/patterns.md"],
     inputDiff: true,
@@ -31,7 +38,7 @@ export const phases = [
   {
     name: "design",
     agentName: "design-polisher",
-    model: "anthropic/claude-sonnet-4-6",
+    model: defaultOpusModel,
     description: "Polishes UI following the repo's design system",
     inputFiles: ["prd.md", "reports/security.md"],
     inputDiff: true,
@@ -40,11 +47,28 @@ export const phases = [
   {
     name: "tests",
     agentName: "test-engineer",
-    model: "anthropic/claude-sonnet-4-6",
+    model: defaultGptModel,
+    variant: defaultGptVariant,
     description: "Ensures unit tests green and designs Maestro flows for E2E",
     inputFiles: ["prd.md"],
     inputDiff: true,
     reportPath: "reports/tests.md",
+  },
+  {
+    name: "adversarial",
+    agentName: "adversarial-reviewer",
+    model: defaultOpusModel,
+    description: "Performs a final adversarial review before PR creation",
+    inputFiles: [
+      "prd.md",
+      "reports/implementer.md",
+      "reports/patterns.md",
+      "reports/security.md",
+      "reports/design.md",
+      "reports/tests.md",
+    ],
+    inputDiff: true,
+    reportPath: "reports/adversarial.md",
   },
 ] as const satisfies readonly Phase[]
 

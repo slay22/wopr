@@ -12,7 +12,7 @@ describe("workspace run IDs", () => {
   test("rejects traversal and arbitrary names", () => {
     expect(isValidRunID("../20260519-103045-x7q2")).toBe(false)
     expect(isValidRunID("latest")).toBe(false)
-    expect(() => runDir("../20260519-103045-x7q2")).toThrow("run id invalido")
+    expect(() => runDir("../20260519-103045-x7q2")).toThrow("invalid run id")
   })
 
   test("resolves run dirs under the archer runs root", () => {

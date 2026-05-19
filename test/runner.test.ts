@@ -9,7 +9,7 @@ describe("runner helpers", () => {
       modelID: "claude-sonnet-4-6",
     })
     expect(parseModel("custom/provider/model")).toEqual({ providerID: "custom", modelID: "provider/model" })
-    expect(() => parseModel("claude-sonnet-4-6")).toThrow("modelo invalido")
+    expect(() => parseModel("claude-sonnet-4-6")).toThrow("invalid model")
   })
 
   test("applies only and skip phase filters", () => {

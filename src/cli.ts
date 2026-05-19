@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
+import { defaultGptModel, defaultGptVariant } from "./phases"
 import { run } from "./runner"
 import type { RunOptions } from "./types"
 
@@ -47,6 +48,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     resumeRunID: "",
     keepRunDir: false,
     modelOverride: "",
+    humanReview: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    emulatorID: "",
+    appRunCommand: "flutter run",
+    interactiveModel: defaultGptModel,
+    interactiveVariant: defaultGptVariant,
     maxAttempts: 2,
     baseRef: "main",
     targetDir: process.cwd(),
@@ -104,6 +110,27 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--model":
         parsed.modelOverride = takeValue()
         break
+      case "--human-review":
+        parsed.humanReview = true
+        break
+      case "--no-human-review":
+        parsed.humanReview = false
+        break
+      case "--emulator":
+        parsed.emulatorID = takeValue()
+        break
+      case "--app-run-command":
+        parsed.appRunCommand = takeValue()
+        break
+      case "--no-app-run":
+        parsed.appRunCommand = ""
+        break
+      case "--interactive-model":
+        parsed.interactiveModel = takeValue()
+        break
+      case "--interactive-variant":
+        parsed.interactiveVariant = takeValue()
+        break
       case "--max-attempts":
         parsed.maxAttempts = parseInt(takeValue(), 10)
         if (!Number.isInteger(parsed.maxAttempts) || parsed.maxAttempts < 1) {
@@ -150,12 +177,19 @@ Usage:
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all phases (repeatable)
-  --only <phases>          Run only these phases (implementer,patterns,security,design,tests)
+  --only <phases>          Run only these phases (implementer,patterns,security,design,tests,adversarial)
   --skip <phases>          Skip these phases
   --resume <id>            Resume a previous run by its ID
   --keep-run-dir           Don't delete the run dir when done
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
   --model <provider/model> Force a model for all phases
+  --human-review           Pause after implementer for manual review (default in interactive terminals)
+  --no-human-review        Disable the post-implementer manual gate
+  --emulator <id>          Launch this Flutter emulator before manual review
+  --app-run-command <cmd>  Command used to run the app during manual review (default: flutter run)
+  --no-app-run             Don't launch the app automatically during manual review
+  --interactive-model <m>  Model used by manual OpenCode iterations (default: ${defaultGptModel})
+  --interactive-variant <v> Model variant for manual iterations (default: ${defaultGptVariant})
   --max-attempts <n>       Attempts per phase before failing (default: 2)
   --base <ref>             Branch/base for calculating diffs (default: main)
   --dir <path>             Target repo (default: cwd)

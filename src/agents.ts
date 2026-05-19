@@ -7,21 +7,21 @@ export function opencodeConfig(runDir: string): Config {
   const agent = {
     implementer: agentConfig(
       "Implements the feature described in the PRD respecting repo patterns",
-      0.2,
+      undefined,
       implementerPrompt,
       runDir,
       false,
     ),
     "pattern-auditor": agentConfig(
       "Audits patterns and best practices, applies refactoring without changing behavior",
-      0.1,
+      undefined,
       patternAuditorPrompt,
       runDir,
       false,
     ),
     "security-auditor": agentConfig(
       "Audits the new implementation for security issues and fixes them",
-      0.1,
+      undefined,
       securityAuditorPrompt,
       runDir,
       false,
@@ -33,7 +33,20 @@ export function opencodeConfig(runDir: string): Config {
       runDir,
       false,
     ),
-    "test-engineer": agentConfig("Ensures green unit coverage and designs Maestro flows for E2E", 0.2, testEngineerPrompt, runDir, false),
+    "test-engineer": agentConfig(
+      "Ensures green unit coverage and designs Maestro flows for E2E",
+      undefined,
+      testEngineerPrompt,
+      runDir,
+      false,
+    ),
+    "adversarial-reviewer": agentConfig(
+      "Final adversarial reviewer before PR creation",
+      0.1,
+      adversarialReviewerPrompt,
+      runDir,
+      false,
+    ),
   } satisfies Record<AgentName, AgentConfig>
 
   return {
@@ -44,11 +57,17 @@ export function opencodeConfig(runDir: string): Config {
   }
 }
 
-function agentConfig(description: string, temperature: number, prompt: string, runDir: string, webfetch: boolean): AgentConfig {
+function agentConfig(
+  description: string,
+  temperature: number | undefined,
+  prompt: string,
+  runDir: string,
+  webfetch: boolean,
+): AgentConfig {
   return {
     description,
     mode: "primary",
-    temperature,
+    ...(temperature === undefined ? {} : { temperature }),
     tools: {
       read: true,
       write: true,
@@ -272,4 +291,34 @@ const testEngineerPrompt = [
   "## Mindset",
   "",
   "Tests are the executable documentation of what the feature promises. If someone breaks that promise six months from now, your tests should complain. If they don't complain, you've failed.",
+].join("\n")
+
+const adversarialReviewerPrompt = [
+  "You are the **adversarial-reviewer** of the `archer` pipeline. You work as the final skeptical reviewer before a pull request is created.",
+  "",
+  "## Your job",
+  "",
+  "1. Read `prd.md`, every previous report available, and the final cumulative diff.",
+  "2. Attack the change as if you were trying to block a risky PR:",
+  "   - Does the implementation actually satisfy the PRD, including edge cases and non-happy paths?",
+  "   - Did any previous phase introduce accidental behavior changes or over-refactors?",
+  "   - Are there missing tests for critical promises?",
+  "   - Are there security, privacy, accessibility, localization, design-system, or migration risks left unresolved?",
+  "   - Is there dead code, debug code, generated noise, or accidental file churn that should not reach a PR?",
+  "3. Apply only small, high-confidence fixes that clearly reduce PR risk. Prefer documenting over changing when the fix would require product judgment or broad refactoring.",
+  "4. Write the report at the indicated absolute path.",
+  "",
+  "## Report",
+  "",
+  "- **Blocking findings**: issues that should prevent PR creation, with file+line and concrete remediation.",
+  "- **Fixes applied**: small changes you made and why.",
+  "- **Non-blocking risks**: things the human reviewer should know before opening the PR.",
+  "- **PR readiness**: one of `ready`, `ready with caveats`, or `not ready`.",
+  "",
+  "## Restrictions",
+  "",
+  "- DO NOT redesign or reimplement the feature.",
+  "- DO NOT add new dependencies.",
+  "- DO NOT execute network operations or remote git operations.",
+  "- DO NOT create the pull request. Your role ends with the review report and any tiny safe fixes.",
 ].join("\n")
