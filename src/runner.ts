@@ -15,6 +15,112 @@ import { createProgressUI, noopProgress, type ProgressPhase, type ProgressUI } f
 import type { Phase, RunOptions } from "./types"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 
+type ActiveSession = {
+  client: OpencodeClient
+  sessionID: string
+  directory: string
+  phaseName: string
+}
+
+export class UserAbortError extends Error {
+  constructor(message = "aborted by user") {
+    super(message)
+    this.name = "UserAbortError"
+  }
+}
+
+export function isUserAbortError(error: unknown): error is UserAbortError {
+  return error instanceof UserAbortError || (error instanceof Error && error.name === "UserAbortError")
+}
+
+export function shouldRetryAttempt(error: unknown, signal: AbortSignal, attempt: number, maxAttempts: number) {
+  return !signal.aborted && !isUserAbortError(error) && attempt < maxAttempts
+}
+
+class RunShutdown {
+  private readonly controller = new AbortController()
+  private activeSession: ActiveSession | undefined
+  private abortingSession: Promise<void> | undefined
+  private requests = 0
+  private forceTimer: ReturnType<typeof setTimeout> | undefined
+
+  get signal() {
+    return this.controller.signal
+  }
+
+  get aborted() {
+    return this.controller.signal.aborted
+  }
+
+  request(source: string) {
+    this.requests++
+    if (this.requests > 1) {
+      log.warn(`${source} received again; forcing exit`)
+      process.exit(130)
+    }
+
+    log.warn(`${source} received; aborting active OpenCode session and shutting down`)
+    this.controller.abort(new UserAbortError(`${source} received`))
+    this.forceTimer = setTimeout(() => {
+      log.warn("Shutdown cleanup timed out; forcing exit")
+      process.exit(130)
+    }, 15_000)
+    this.forceTimer.unref?.()
+  }
+
+  throwIfRequested() {
+    if (this.aborted) throw this.abortError()
+  }
+
+  abortError(fallback?: unknown) {
+    if (isUserAbortError(this.signal.reason)) return this.signal.reason
+    if (isUserAbortError(fallback)) return fallback
+    return new UserAbortError()
+  }
+
+  setActiveSession(session: ActiveSession) {
+    this.activeSession = session
+  }
+
+  clearActiveSession(sessionID: string) {
+    if (this.activeSession?.sessionID === sessionID) this.activeSession = undefined
+  }
+
+  async abortActiveSession(progress?: ProgressUI) {
+    if (this.abortingSession) return this.abortingSession
+    const session = this.activeSession
+    if (!session) return
+
+    this.abortingSession = (async () => {
+      progress?.phaseActivity(session.phaseName, "aborting active OpenCode session")
+      try {
+        const response = await session.client.session.abort({ sessionID: session.sessionID, directory: session.directory })
+        if (response.error) log.warn(`couldn't abort OpenCode session ${session.sessionID}: ${formatSdkError(response.error)}`)
+      } catch (error) {
+        log.warn(`couldn't abort OpenCode session ${session.sessionID}: ${formatSdkError(error)}`)
+      }
+    })().finally(() => {
+      this.abortingSession = undefined
+    })
+
+    return this.abortingSession
+  }
+
+  dispose() {
+    if (this.forceTimer) clearTimeout(this.forceTimer)
+  }
+}
+
+function installShutdownSignals(shutdown: RunShutdown) {
+  const handler = (signal: NodeJS.Signals) => shutdown.request(signal)
+  process.on("SIGINT", handler)
+  process.on("SIGTERM", handler)
+  return () => {
+    process.off("SIGINT", handler)
+    process.off("SIGTERM", handler)
+  }
+}
+
 export async function run(options: RunOptions) {
   await ensureRepoReady(options.targetDir, { includeDirty: options.includeDirty, maxAttempts: options.maxAttempts })
 
@@ -26,17 +132,19 @@ export async function run(options: RunOptions) {
   let opencode: Awaited<ReturnType<typeof startOpencode>> | undefined
   let progress: ProgressUI = noopProgress
   let permissions: PermissionGate | undefined
+  const shutdown = new RunShutdown()
+  const removeSignalHandlers = installShutdownSignals(shutdown)
 
   try {
-    progress = await createProgressUI(progressPhases(options), options.tui)
+    progress = await createProgressUI(progressPhases(options), options.tui, () => shutdown.request("Ctrl+C"))
     progress.start(workspace.runID, options.targetDir)
     log.info(`Run ${workspace.runID} - dir: ${workspace.dir}`)
 
     const extraFiles = await fileParts(options.files, options.targetDir, "error")
     if (extraFiles.length > 0) log.info(`User attachments: ${extraFiles.map((file) => file.filename).join(", ")}`)
 
-    opencode = await startOpencode(opencodeConfig(workspace.dir))
-    progress.message("opencode SDK ready")
+    opencode = await startOpencode(opencodeConfig(workspace.dir), shutdown.signal)
+    progress.serverReady(opencode.url)
     log.info(`opencode SDK ready at ${opencode.url}`)
 
     permissions = startPermissionGate({
@@ -46,13 +154,14 @@ export async function run(options: RunOptions) {
     })
 
     for (const phase of phases) {
+      shutdown.throwIfRequested()
       if (shouldSkip(phase.name, options)) {
         progress.phaseSkipped(phase.name)
         if (phase.name === "implementer" && options.humanReview) progress.phaseSkipped("human-review")
         log.warn(`[${phase.name}] skipped by flag`)
         continue
       }
-      await runPhase(opencode.client, workspace, phase, options, extraFiles, progress)
+      await runPhase(opencode.client, workspace, phase, options, extraFiles, progress, shutdown)
       if (phase.name === "implementer") await runHumanReviewGate(workspace, options, opencode.url, progress)
     }
 
@@ -62,9 +171,12 @@ export async function run(options: RunOptions) {
     runErr = error
     throw error
   } finally {
+    removeSignalHandlers()
+    if (shutdown.aborted) await shutdown.abortActiveSession(progress)
     await permissions?.stop()
     progress.stop()
     opencode?.close()
+    shutdown.dispose()
 
     if (runErr || options.keepRunDir) {
       log.warn(`Run dir preserved at ${workspace.dir}`)
@@ -81,6 +193,7 @@ async function runPhase(
   options: RunOptions,
   extraFiles: FilePartInput[],
   progress: ProgressUI,
+  shutdown: RunShutdown,
 ) {
   progress.phaseStarted(phase.name, phase.description)
   log.section(`${phase.name} - ${phase.description}`)
@@ -88,7 +201,7 @@ async function runPhase(
   try {
     const prepared = await preparePhaseRun(workspace, phase, options, extraFiles)
     const baseline = await createCleanRepoSnapshot(options.targetDir)
-    const assistantText = await runPhaseWithRetries(client, workspace, phase, options.targetDir, prepared, baseline, progress)
+    const assistantText = await runPhaseWithRetries(client, workspace, phase, options.targetDir, prepared, baseline, progress, shutdown)
 
     const reportAbs = await persistPhaseReport(workspace, phase, assistantText)
     await commitPhase(phase, reportAbs, options.targetDir)
@@ -134,6 +247,7 @@ async function runPhaseWithRetries(
   prepared: PreparedPhaseRun,
   baseline: RepoSnapshot | undefined,
   progress: ProgressUI,
+  shutdown: RunShutdown,
 ) {
   if (!baseline && prepared.maxAttempts > 1) {
     throw new Error(`[${phase.name}] can't retry with dirty working tree; use --max-attempts 1 or clean the repo`)
@@ -142,18 +256,22 @@ async function runPhaseWithRetries(
   let lastError: unknown
 
   for (let attempt = 1; attempt <= prepared.maxAttempts; attempt++) {
+    shutdown.throwIfRequested()
     progress.phaseRunning(phase.name, `attempt ${attempt}/${prepared.maxAttempts} ${formatModel(prepared.model)}`)
     log.info(`[${phase.name}] attempt ${attempt}/${prepared.maxAttempts} with ${formatModel(prepared.model)}`)
     try {
-      return await runPhaseAttempt(client, workspace, phase, targetDir, prepared, attempt)
+      return await runPhaseAttempt(client, workspace, phase, targetDir, prepared, attempt, progress, shutdown)
     } catch (error) {
+      if (!shouldRetryAttempt(error, shutdown.signal, attempt, prepared.maxAttempts) && (shutdown.aborted || isUserAbortError(error))) {
+        throw shutdown.abortError(error)
+      }
       lastError = error
       progress.phaseRunning(phase.name, `attempt ${attempt} failed`)
       log.warn(`[${phase.name}] attempt ${attempt} failed: ${formatSdkError(error)}`)
       if (!(error instanceof LoggedAttemptError)) {
         await writeAttemptLog(workspace, phase, attempt, { error: formatSdkError(error) })
       }
-      if (attempt < prepared.maxAttempts) await restorePhaseBaseline(phase, baseline, targetDir, error)
+      if (shouldRetryAttempt(error, shutdown.signal, attempt, prepared.maxAttempts)) await restorePhaseBaseline(phase, baseline, targetDir, error)
     }
   }
 
@@ -172,6 +290,8 @@ async function runPhaseAttempt(
   targetDir: string,
   prepared: PreparedPhaseRun,
   attempt: number,
+  progress: ProgressUI,
+  shutdown: RunShutdown,
 ) {
   const result = await promptPhase(client, {
     phase,
@@ -180,6 +300,8 @@ async function runPhaseAttempt(
     prompt: prepared.prompt,
     model: prepared.model,
     attachments: prepared.attachments,
+    progress,
+    shutdown,
   })
   const assistantText = extractAssistantText(result.parts)
 
@@ -244,27 +366,314 @@ async function promptPhase(
     prompt: string
     model: ModelSelection
     attachments: FilePartInput[]
+    progress: ProgressUI
+    shutdown: RunShutdown
   },
 ) {
+  input.shutdown.throwIfRequested()
   const session = await client.session.create({
     directory: input.targetDir,
     title: `archer ${input.workspace.runID} ${input.phase.name}`,
-  })
+  }, { signal: input.shutdown.signal })
   if (session.error) throw new Error(formatSdkError(session.error))
   if (!session.data?.id) throw new Error("opencode didn't return session id")
 
-  const response = await client.session.prompt({
-    sessionID: session.data.id,
-    directory: input.targetDir,
-    agent: input.phase.agentName,
-    model: { providerID: input.model.providerID, modelID: input.model.modelID },
-    variant: input.model.variant,
-    parts: [...input.attachments, { type: "text", text: input.prompt }],
-  })
+  input.progress.phaseSession(input.phase.name, session.data.id)
+  input.shutdown.setActiveSession({ client, sessionID: session.data.id, directory: input.targetDir, phaseName: input.phase.name })
+  log.info(`[${input.phase.name}] session: ${session.data.id}`)
 
-  if (response.error) throw new Error(formatSdkError(response.error))
-  if (!response.data) throw new Error("opencode didn't return response")
-  return response.data
+  const activity = await startSessionActivityMonitor(client, input.targetDir, input.phase.name, session.data.id, input.progress)
+
+  try {
+    const response = await client.session.prompt({
+      sessionID: session.data.id,
+      directory: input.targetDir,
+      agent: input.phase.agentName,
+      model: { providerID: input.model.providerID, modelID: input.model.modelID },
+      variant: input.model.variant,
+      parts: [...input.attachments, { type: "text", text: input.prompt }],
+    }, { signal: input.shutdown.signal })
+
+    input.shutdown.throwIfRequested()
+    if (response.error) throw new Error(formatSdkError(response.error))
+    if (!response.data) throw new Error("opencode didn't return response")
+    return response.data
+  } finally {
+    if (input.shutdown.aborted) await input.shutdown.abortActiveSession(input.progress)
+    input.shutdown.clearActiveSession(session.data.id)
+    await activity.stop()
+  }
+}
+
+type SessionActivityMonitor = {
+  stop(): Promise<void>
+}
+
+type ActivityState = {
+  reasoningChars: number
+  textChars: number
+  textTail: string
+  lastReasoningUpdate: number
+  lastTextUpdate: number
+  lastServerEvent: number
+}
+
+const serverHeartbeatMs = 30_000
+
+async function startSessionActivityMonitor(
+  client: OpencodeClient,
+  directory: string,
+  phaseName: string,
+  sessionID: string,
+  progress: ProgressUI,
+): Promise<SessionActivityMonitor> {
+  const controller = new AbortController()
+  const state: ActivityState = {
+    reasoningChars: 0,
+    textChars: 0,
+    textTail: "",
+    lastReasoningUpdate: 0,
+    lastTextUpdate: 0,
+    lastServerEvent: Date.now(),
+  }
+
+  try {
+    const stream = await client.event.subscribe({ directory }, { signal: controller.signal })
+    let heartbeatRunning = false
+    const heartbeat = setInterval(() => {
+      if (controller.signal.aborted || heartbeatRunning || Date.now() - state.lastServerEvent < serverHeartbeatMs) return
+      heartbeatRunning = true
+      void (async () => {
+        try {
+          const response = await client.session.get({ sessionID, directory })
+          if (controller.signal.aborted) return
+          if (response.error) {
+            progress.phaseActivity(phaseName, `server heartbeat failed: ${formatSdkError(response.error)}`)
+            return
+          }
+          state.lastServerEvent = Date.now()
+          progress.phaseActivity(phaseName, "server heartbeat ok; OpenCode is still working")
+        } catch (error) {
+          if (!controller.signal.aborted) progress.phaseActivity(phaseName, `server heartbeat failed: ${formatSdkError(error)}`)
+        } finally {
+          heartbeatRunning = false
+        }
+      })()
+    }, serverHeartbeatMs)
+
+    const listenerDone = (async () => {
+      try {
+        for await (const event of stream.stream) {
+          if (controller.signal.aborted) return
+          const payload = eventPayload(event)
+          if (!payloadMatchesSession(payload, sessionID)) continue
+          state.lastServerEvent = Date.now()
+          const activity = describeSessionActivity(payload, state)
+          if (activity) progress.phaseActivity(phaseName, activity)
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) progress.phaseActivity(phaseName, `event stream stopped: ${formatSdkError(error)}`)
+      }
+    })()
+
+    return {
+      async stop() {
+        controller.abort()
+        clearInterval(heartbeat)
+        try {
+          await listenerDone
+        } catch {
+          // ignore shutdown races
+        }
+      },
+    }
+  } catch (error) {
+    progress.phaseActivity(phaseName, `live events unavailable: ${formatSdkError(error)}`)
+    return { async stop() {} }
+  }
+}
+
+function eventPayload(event: unknown) {
+  if (event && typeof event === "object" && "payload" in event) return (event as { payload?: unknown }).payload
+  return event
+}
+
+function payloadProperties(payload: unknown) {
+  if (!payload || typeof payload !== "object") return undefined
+  const properties = (payload as { properties?: unknown }).properties
+  if (properties && typeof properties === "object") return properties as Record<string, unknown>
+  const data = (payload as { data?: unknown }).data
+  if (data && typeof data === "object") return data as Record<string, unknown>
+  return undefined
+}
+
+function payloadType(payload: unknown) {
+  if (!payload || typeof payload !== "object") return ""
+  const type = (payload as { type?: unknown }).type
+  if (typeof type === "string") return type === "sync" ? String((payload as { name?: unknown }).name ?? "").replace(/\.1$/, "") : type
+  const name = (payload as { name?: unknown }).name
+  return typeof name === "string" ? name.replace(/\.1$/, "") : ""
+}
+
+function payloadMatchesSession(payload: unknown, sessionID: string) {
+  const properties = payloadProperties(payload)
+  return properties?.sessionID === sessionID
+}
+
+function describeSessionActivity(payload: unknown, state: ActivityState) {
+  const type = payloadType(payload)
+  const properties = payloadProperties(payload)
+  if (!properties) return undefined
+  const now = Date.now()
+
+  switch (type) {
+    case "session.next.prompted":
+      return "prompt submitted"
+    case "session.next.step.started":
+      return `thinking with ${formatModelFromEvent(properties.model)}`
+    case "session.next.step.ended":
+      return `step finished: ${pickString(properties, ["finish"]) || "complete"}${formatCost(properties)}`
+    case "session.next.step.failed":
+      return `step failed: ${formatEventError(properties.error)}`
+    case "session.status":
+      return formatSessionStatus(properties.status)
+    case "session.idle":
+      return "session idle"
+    case "session.next.reasoning.started":
+      state.reasoningChars = 0
+      state.lastReasoningUpdate = now
+      return "thinking..."
+    case "session.next.reasoning.delta":
+      state.reasoningChars += pickString(properties, ["delta"]).length
+      if (now - state.lastReasoningUpdate < 1000) return undefined
+      state.lastReasoningUpdate = now
+      return `thinking (${state.reasoningChars} hidden chars)`
+    case "session.next.reasoning.ended":
+      return "thinking complete"
+    case "session.next.text.started":
+      state.textChars = 0
+      state.textTail = ""
+      state.lastTextUpdate = now
+      return "writing response..."
+    case "session.next.text.delta": {
+      const delta = pickString(properties, ["delta"])
+      state.textChars += delta.length
+      state.textTail = `${state.textTail}${delta}`.slice(-160)
+      if (now - state.lastTextUpdate < 350) return undefined
+      state.lastTextUpdate = now
+      return `writing response (${state.textChars} chars): ${state.textTail}`
+    }
+    case "session.next.text.ended":
+      return `response complete (${pickString(properties, ["text"]).length || state.textChars} chars)`
+    case "message.part.delta":
+      return `streaming ${pickString(properties, ["field"]) || "message"}`
+    case "session.next.tool.input.started":
+      return `preparing ${pickString(properties, ["name"]) || "tool"}`
+    case "session.next.tool.called":
+      return `tool ${describeToolCall(properties)}`
+    case "session.next.tool.progress":
+      return `tool progress: ${describeToolContent(properties.content)}`
+    case "session.next.tool.success":
+      return `tool complete: ${describeToolContent(properties.content)}`
+    case "session.next.tool.failed":
+      return `tool failed: ${formatEventError(properties.error)}`
+    case "session.next.shell.started":
+      return `bash: ${pickString(properties, ["command"])}`
+    case "session.next.shell.ended":
+      return `bash complete: ${firstLine(pickString(properties, ["output"]))}`
+    case "session.next.retried":
+      return `provider retry ${properties.attempt ?? ""}: ${formatEventError(properties.error)}`
+    case "session.next.compaction.started":
+      return `compacting context (${pickString(properties, ["reason"]) || "auto"})`
+    case "session.next.compaction.delta":
+      return "compacting context..."
+    case "session.next.compaction.ended":
+      return "context compaction complete"
+    case "permission.asked":
+      return `permission requested: ${pickString(properties, ["permission"])}`
+    case "permission.replied":
+      return `permission ${pickString(properties, ["reply"])}`
+    case "todo.updated":
+      return `todo list updated (${Array.isArray(properties.todos) ? properties.todos.length : 0})`
+    case "session.diff":
+      return `diff updated (${Array.isArray(properties.diff) ? properties.diff.length : 0} files)`
+    case "session.error":
+      return `session error: ${formatEventError(properties.error)}`
+    default:
+      if (type.startsWith("session.next.")) return type.replace(/^session\.next\./, "")
+      return undefined
+  }
+}
+
+function formatModelFromEvent(value: unknown) {
+  if (!value || typeof value !== "object") return "selected model"
+  const model = value as { providerID?: unknown; id?: unknown; variant?: unknown }
+  const provider = typeof model.providerID === "string" ? model.providerID : "provider"
+  const id = typeof model.id === "string" ? model.id : "model"
+  const variant = typeof model.variant === "string" && model.variant ? `#${model.variant}` : ""
+  return `${provider}/${id}${variant}`
+}
+
+function formatCost(properties: Record<string, unknown>) {
+  const tokens = properties.tokens
+  const cost = typeof properties.cost === "number" ? `, $${properties.cost.toFixed(4)}` : ""
+  if (!tokens || typeof tokens !== "object") return cost
+  const input = typeof (tokens as { input?: unknown }).input === "number" ? (tokens as { input: number }).input : 0
+  const output = typeof (tokens as { output?: unknown }).output === "number" ? (tokens as { output: number }).output : 0
+  return `, tokens ${input}/${output}${cost}`
+}
+
+function formatSessionStatus(value: unknown) {
+  if (!value || typeof value !== "object") return "session status changed"
+  const status = value as { type?: unknown; attempt?: unknown; message?: unknown }
+  if (status.type === "busy") return "provider busy"
+  if (status.type === "idle") return "provider idle"
+  if (status.type === "retry") return `provider retry ${status.attempt ?? ""}: ${typeof status.message === "string" ? status.message : "waiting"}`
+  return "session status changed"
+}
+
+function describeToolCall(properties: Record<string, unknown>) {
+  const tool = pickString(properties, ["tool"]) || "tool"
+  const input = properties.input && typeof properties.input === "object" ? (properties.input as Record<string, unknown>) : {}
+  const target = pickString(input, ["command", "cmd", "filePath", "path", "pattern", "query", "url", "description"])
+  return target ? `${tool}: ${target}` : tool
+}
+
+function describeToolContent(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return "done"
+  const text = value.find((item) => item && typeof item === "object" && (item as { type?: unknown }).type === "text") as { text?: unknown } | undefined
+  if (typeof text?.text === "string" && text.text.trim()) return firstLine(text.text)
+  const file = value.find((item) => item && typeof item === "object" && (item as { type?: unknown }).type === "file") as { name?: unknown; uri?: unknown } | undefined
+  if (typeof file?.name === "string") return file.name
+  if (typeof file?.uri === "string") return file.uri
+  return "done"
+}
+
+function formatEventError(value: unknown) {
+  if (!value || typeof value !== "object") return String(value ?? "unknown error")
+  const message = (value as { message?: unknown }).message
+  if (typeof message === "string") return message
+  const data = (value as { data?: unknown }).data
+  if (data && typeof data === "object" && typeof (data as { message?: unknown }).message === "string") return (data as { message: string }).message
+  return String((value as { name?: unknown; type?: unknown }).name ?? (value as { type?: unknown }).type ?? "unknown error")
+}
+
+function pickString(values: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = values[key]
+    if (typeof value === "string" && value.length > 0) return truncate(value, 220)
+  }
+  return ""
+}
+
+function firstLine(value: string) {
+  return truncate(value.split("\n").find((line) => line.trim()) ?? "done", 220)
+}
+
+function truncate(value: string, max: number) {
+  const singleLine = value.replace(/\s+/g, " ").trim()
+  if (singleLine.length <= max) return singleLine
+  return `${singleLine.slice(0, Math.max(0, max - 3))}...`
 }
 
 function buildPhasePrompt(workspace: Workspace, phase: Phase) {

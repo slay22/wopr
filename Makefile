@@ -8,7 +8,7 @@ build:
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
-	@mv $(BIN) $(INSTALL_DIR)/$(BIN)
+	@install -m 755 $(BIN) $(INSTALL_DIR)/$(BIN)
 	@echo "✓ Instalado en $(INSTALL_DIR)/$(BIN)"
 	@echo "  Asegúrate de que $(INSTALL_DIR) está en tu PATH."
 
@@ -17,7 +17,7 @@ uninstall:
 	@echo "✓ Desinstalado $(INSTALL_DIR)/$(BIN)"
 
 clean:
-	@rm -f $(BIN)
+	@rm -f $(BIN) src/$(BIN)
 
 test:
 	bun run typecheck

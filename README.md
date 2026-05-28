@@ -101,7 +101,9 @@ archer --prompt-file prd.md --base develop
 archer --prompt-file prd.md --include-dirty --max-attempts 1
 ```
 
-In interactive terminals, Archer shows an OpenTUI split-footer with live harness progress across phases. Use `--no-tui` to fall back to plain logs.
+In interactive terminals, Archer shows a full-screen OpenTUI dashboard with live harness progress across phases. Press `o`, or click the footer, to open the active OpenCode session in a new Terminal window attached to Archer's running OpenCode server. Press `Ctrl+C` once to abort the active OpenCode session and shut down Archer cleanly; press it again to force exit if cleanup hangs. Use `--no-tui` to fall back to plain logs.
+
+Archer disables OpenCode's total provider request timeout for its default providers and keeps a 10-minute stream idle timeout instead, so long-running phases are not restarted just because they take more than a few minutes. The TUI also emits periodic server heartbeats while a phase is waiting on OpenCode.
 
 ## Permission gate
 

@@ -51,9 +51,25 @@ export function opencodeConfig(runDir: string): Config {
 
   return {
     agent,
+    provider: providerTimeouts(),
     permission: {
       question: "deny",
     },
+  }
+}
+
+const providerIdleTimeoutMs = 10 * 60 * 1000
+
+function providerTimeouts(): Config["provider"] {
+  const options = {
+    timeout: false as const,
+    chunkTimeout: providerIdleTimeoutMs,
+  }
+
+  return {
+    anthropic: { options },
+    openai: { options },
+    openrouter: { options },
   }
 }
 
