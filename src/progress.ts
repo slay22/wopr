@@ -363,7 +363,7 @@ class OpenTuiProgress implements ProgressUI {
     const width = Math.max(40, this.renderer.width - 8)
 
     this.headerText.content = [
-      `Sequential agent pipeline for Flutter feature work`,
+      `Sequential agent pipeline for feature work`,
       truncate(current, width),
       `run ${this.runID || "pending"} | ${done}/${total} phases | elapsed ${formatElapsed(now - this.startedAt)} | last event ${formatAgo(now - this.lastActivityAt)}`,
       truncate(`target ${this.targetDir || process.cwd()}`, width),

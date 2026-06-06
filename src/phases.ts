@@ -49,7 +49,7 @@ export const phases = [
     agentName: "test-engineer",
     model: defaultGptModel,
     variant: defaultGptVariant,
-    description: "Ensures unit tests green and designs Maestro flows for E2E",
+    description: "Ensures automated tests and relevant E2E coverage",
     inputFiles: ["prd.md"],
     inputDiff: true,
     reportPath: "reports/tests.md",

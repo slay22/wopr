@@ -63,4 +63,11 @@ describe("cli parsing", () => {
     expect(parsed.interactiveModel).toBe("openai/gpt-5.5-pro")
     expect(parsed.interactiveVariant).toBe("xhigh")
   })
+
+  test("does not configure a Flutter app command by default", () => {
+    const parsed = parseArgs(["prompt"])
+
+    expect(parsed.appRunCommand).toBe("")
+    expect(parsed.emulatorID).toBe("")
+  })
 })

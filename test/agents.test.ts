@@ -1,6 +1,10 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { describe, expect, test } from "bun:test"
 
-import { opencodeConfig } from "../src/agents"
+import { bashPolicy, loadAgentPrompt, opencodeConfig } from "../src/agents"
 
 describe("opencode config", () => {
   test("disables total provider timeouts but keeps idle stream timeouts", () => {
@@ -10,5 +14,43 @@ describe("opencode config", () => {
       expect(config.provider?.[provider]?.options?.timeout).toBe(false)
       expect(config.provider?.[provider]?.options?.chunkTimeout).toBe(600_000)
     }
+  })
+
+  test("loads built-in markdown prompts with runtime safety guard rails", () => {
+    const prompt = loadAgentPrompt("implementer", "/tmp/non-existent-archer-target")
+
+    expect(prompt).toContain("# Implementer")
+    expect(prompt).toContain("# Archer Runtime Safety")
+    expect(prompt).toContain("not replaceable")
+  })
+
+  test("project agent prompts replace built-ins but keep runtime safety", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "archer-agents-"))
+    try {
+      await mkdir(join(dir, ".archer", "agents"), { recursive: true })
+      await writeFile(join(dir, ".archer", "agents", "implementer.md"), "# Custom Implementer\n\nProject-specific prompt.")
+
+      const prompt = loadAgentPrompt("implementer", dir)
+
+      expect(prompt.startsWith("# Custom Implementer")).toBe(true)
+      expect(prompt).toContain("Project-specific prompt.")
+      expect(prompt).not.toContain("# Implementer\n\nYou are the **implementer**")
+      expect(prompt).toContain("# Archer Runtime Safety")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("bash policy includes web checks and keeps dangerous operations denied", () => {
+    const policy = bashPolicy()
+
+    expect(policy["pnpm run lint*"]).toBe("allow")
+    expect(policy["npm run typecheck*"]).toBe("allow")
+    expect(policy["bun test*"]).toBe("allow")
+    expect(policy["tsc --noEmit*"]).toBe("allow")
+    expect(policy["git push*"]).toBe("deny")
+    expect(policy["npm install*"]).toBe("deny")
+    expect(policy["npm run deploy*"]).toBe("deny")
+    expect(policy["*"]).toBe("ask")
   })
 })

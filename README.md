@@ -1,6 +1,6 @@
 # archer
 
-Sequential [OpenCode](https://opencode.ai) agent pipeline for implementing features on a Flutter repo. Takes a PRD, runs agents in chain, and leaves one commit per phase.
+Sequential [OpenCode](https://opencode.ai) agent pipeline for implementing features on software repos. It works with Flutter, web, backend, CLI, and mixed projects by detecting the repo's existing stack and conventions. Takes a PRD, runs agents in chain, and leaves one commit per phase.
 
 Archer is written in Bun + TypeScript and uses `@opencode-ai/sdk` to control OpenCode. The SDK starts/controls the OpenCode server; Archer no longer manually calls `opencode run` nor parses stdout.
 
@@ -20,7 +20,7 @@ PRD ──► implementer ──► human-review ──► pattern-auditor ─�
 | `patterns` | `openai/gpt-5.5#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
 | `security` | `openai/gpt-5.5#xhigh` | Audits and fixes security issues |
 | `design` | `anthropic/claude-opus-4-7` | Polishes UI following the repo's design system |
-| `tests` | `openai/gpt-5.5#xhigh` | Unit/widget tests green + Maestro flows |
+| `tests` | `openai/gpt-5.5#xhigh` | Automated tests + relevant E2E/integration coverage |
 | `adversarial` | `anthropic/claude-opus-4-7` | Final adversarial review before PR creation |
 
 ## Requirements
@@ -68,7 +68,7 @@ archer "Add onboarding screen with 3 steps and local persistence of progress"
 archer --prompt-file prd.md
 
 # attach files or directories to all phases
-archer --prompt-file prd.md --file lib/features/onboarding --file test/onboarding_test.dart
+archer --prompt-file prd.md --file src/features/onboarding --file tests/onboarding.test.ts
 
 # only one phase
 archer --prompt-file prd.md --only implementer
@@ -85,7 +85,10 @@ archer --prompt-file prd.md --no-tui
 # disable the post-implementer manual checkpoint
 archer --prompt-file prd.md --no-human-review
 
-# prefer a specific Flutter emulator and app command during manual review auto-start
+# configure the app command used during manual review
+archer --prompt-file prd.md --app-run-command "pnpm dev"
+
+# optional Flutter emulator launch during manual review
 archer --prompt-file prd.md --emulator Pixel_8 --app-run-command "flutter run -d emulator-5554"
 
 # resume a failed run
@@ -107,7 +110,7 @@ Archer disables OpenCode's total provider request timeout for its default provid
 
 ## Permission gate
 
-Agents run with a restricted bash policy: a small allowlist of safe Flutter/Dart/git commands, a small denylist of unambiguously dangerous patterns (`git push*`, `gh*`, `sudo*`, recursive deletes against `/` or `~`, `curl … | sh`, package installers), and everything else falls through to `ask`.
+Agents run with a restricted bash policy: a small allowlist of safe Flutter/Dart, web/Node, test/build, and read-only git commands; a denylist of unambiguously dangerous patterns (`git push*`, `gh*`, deployment/publish commands, `sudo*`, recursive deletes against `/` or `~`, `curl … | sh`, package installers); and everything else falls through to `ask`.
 
 When an agent runs a command that isn't on the allowlist, Archer prints the request and prompts:
 
@@ -125,7 +128,34 @@ In non-interactive runs (no TTY), unknown commands are auto-rejected and logged.
 
 Before each commit Archer scans the staged files for common secret names (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.p12`, `*.keystore`, ...). If any match, the commit is aborted, the index reset, and Archer asks you to add them to `.gitignore` (or delete them) before re-running. Combined with `--include-dirty` this is the only line of defense against accidentally publishing a secret your working tree had lying around — review the resulting commits with `git show` before pushing.
 
-During `human-review`, Archer waits 10 seconds for an explicit action. If nobody answers, it automatically starts the preferred Flutter emulator, or the first emulator returned by `flutter emulators --machine`, then runs the app command in the target worktree so the implementation is compiled and ready to test when the user returns.
+During `human-review`, Archer waits 10 seconds for an explicit action. If nobody answers, it prepares the configured app command in the target worktree. By default the app command is disabled; pass `--app-run-command "pnpm dev"`, `--app-run-command "flutter run"`, or the repo's equivalent. Archer only launches a Flutter emulator when `--emulator <id>` is explicitly provided.
+
+## Project Context And Custom Agents
+
+Archer automatically attaches these target-repo files to every phase when they exist:
+
+```text
+.archer/rules.md
+AGENTS.md
+CLAUDE.md
+```
+
+Use `.archer/rules.md` for project-specific Archer instructions. It is intentionally the only Archer rules filename to avoid ambiguous precedence. `AGENTS.md` and `CLAUDE.md` are treated as additional repo context.
+
+Built-in agent prompts live as Markdown files under `prompts/`. A project can fully replace a built-in agent prompt with:
+
+```text
+.archer/
+└── agents/
+    ├── implementer.md
+    ├── pattern-auditor.md
+    ├── security-auditor.md
+    ├── design-polisher.md
+    ├── test-engineer.md
+    └── adversarial-reviewer.md
+```
+
+When a project override exists, it replaces that agent's built-in prompt completely. Archer still appends its non-replaceable runtime safety guard rails from `prompts/runtime-safety.md`.
 
 ## Efficient Attachments
 
@@ -182,12 +212,14 @@ archer/
 │   ├── cli.ts           # flag parsing
 │   ├── runner.ts        # pipeline orchestration
 │   ├── opencode.ts      # startup/control via SDK
-│   ├── agents.ts        # inline prompts, agent config, bash policy
+│   ├── agents.ts        # prompt loading, agent config, bash policy
+│   ├── project-context.ts # automatic .archer/rules.md, AGENTS.md, CLAUDE.md discovery
 │   ├── permissions.ts   # live permission gate for tool calls that fall outside the allowlist
 │   ├── attachments.ts   # FilePartInput for --file and internal attachments
 │   ├── git.ts           # diff, commit, and pre-commit secret scan
 │   ├── workspace.ts     # run dir
 │   └── phases.ts        # declarative phase definition
+├── prompts/             # built-in agent prompts and runtime safety guard rails
 ├── test/                # unit tests for CLI/orchestration
 ├── package.json
 ├── tsconfig.json

@@ -11,7 +11,6 @@ import type { Workspace } from "./workspace"
 
 type AppProcess = ReturnType<typeof Bun.spawn>
 type HumanAction = "continue" | "iterate" | "rerun" | "abort" | "prepare"
-type FlutterEmulator = { id?: string; name?: string; platformType?: string }
 
 export async function runHumanReviewGate(workspace: Workspace, options: RunOptions, opencodeUrl: string, progress: ProgressUI = noopProgress) {
   if (!options.humanReview) return
@@ -24,7 +23,7 @@ export async function runHumanReviewGate(workspace: Workspace, options: RunOptio
 
   progress.phaseStarted("human-review", "waiting for manual action")
   log.section("human-review - implementation checkpoint")
-  log.info("choose an action now, or Archer will start the emulator and app automatically after 10 seconds")
+  log.info("choose an action now, or Archer will prepare the configured app command after 10 seconds")
 
   let iterations = 0
   let app: AppProcess | undefined
@@ -67,16 +66,16 @@ export async function runHumanReviewGate(workspace: Workspace, options: RunOptio
 }
 
 async function prepareApp(options: RunOptions, progress: ProgressUI): Promise<AppProcess | undefined> {
-  progress.phaseRunning("human-review", "launching emulator")
+  progress.phaseRunning("human-review", "preparing app")
   await launchEmulator(options)
   progress.phaseRunning("human-review", "running app command")
   return await startApp(options)
 }
 
 async function launchEmulator(options: RunOptions) {
-  const emulatorID = options.emulatorID || (await findDefaultEmulator(options.targetDir))
+  const emulatorID = options.emulatorID
   if (!emulatorID) {
-    log.warn("[human-review] no Flutter emulator configured or detected; starting app command without launching one")
+    log.info("[human-review] no emulator configured; starting app command without launching one")
     return
   }
 
@@ -90,35 +89,6 @@ async function launchEmulator(options: RunOptions) {
   })
   const code = await proc.exited
   if (code !== 0) log.warn(`[human-review] emulator launch exited with code ${code}; start it manually if needed`)
-}
-
-async function findDefaultEmulator(targetDir: string) {
-  const proc = Bun.spawn(["flutter", "emulators", "--machine"], {
-    cwd: targetDir,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  })
-  const stdoutPromise = new Response(proc.stdout).text()
-  const stderrPromise = new Response(proc.stderr).text()
-  const code = await proc.exited
-  const [stdoutText, stderrText] = await Promise.all([stdoutPromise, stderrPromise])
-
-  if (code !== 0) {
-    log.warn(`[human-review] couldn't list Flutter emulators: ${(stderrText || stdoutText).trim() || `exit ${code}`}`)
-    return ""
-  }
-
-  try {
-    const emulators = JSON.parse(stdoutText) as FlutterEmulator[]
-    const emulator = emulators.find((item) => item.platformType === "android") ?? emulators[0]
-    if (emulator?.id) log.info(`[human-review] selected emulator ${emulator.id}${emulator.name ? ` (${emulator.name})` : ""}`)
-    return emulator?.id ?? ""
-  } catch {
-    log.warn("[human-review] couldn't parse `flutter emulators --machine` output; pass --emulator explicitly if needed")
-    return ""
-  }
 }
 
 async function startApp(options: RunOptions): Promise<AppProcess | undefined> {
@@ -162,7 +132,7 @@ async function askHumanAction(options: { timeoutMs?: number; timeoutAction?: Hum
   } catch (error) {
     if (options.timeoutAction && error instanceof Error && error.name === "AbortError") {
       stdout.write("\n")
-      log.info("[human-review] no response; starting emulator and app automatically")
+      log.info("[human-review] no response; preparing configured app command")
       return options.timeoutAction
     }
     throw error

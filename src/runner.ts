@@ -12,6 +12,7 @@ import { startOpencode } from "./opencode"
 import { startPermissionGate, type PermissionGate } from "./permissions"
 import { phases } from "./phases"
 import { createProgressUI, noopProgress, type ProgressPhase, type ProgressUI } from "./progress"
+import { discoverProjectContextFiles } from "./project-context"
 import type { Phase, RunOptions } from "./types"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 
@@ -142,8 +143,10 @@ export async function run(options: RunOptions) {
 
     const extraFiles = await fileParts(options.files, options.targetDir, "error")
     if (extraFiles.length > 0) log.info(`User attachments: ${extraFiles.map((file) => file.filename).join(", ")}`)
+    const projectContextFiles = await discoverProjectContextFiles(options.targetDir)
+    if (projectContextFiles.length > 0) log.info(`Project context: ${projectContextFiles.join(", ")}`)
 
-    opencode = await startOpencode(opencodeConfig(workspace.dir), shutdown.signal)
+    opencode = await startOpencode(opencodeConfig(workspace.dir, options.targetDir), shutdown.signal)
     progress.serverReady(opencode.url)
     log.info(`opencode SDK ready at ${opencode.url}`)
 
@@ -161,7 +164,7 @@ export async function run(options: RunOptions) {
         log.warn(`[${phase.name}] skipped by flag`)
         continue
       }
-      await runPhase(opencode.client, workspace, phase, options, extraFiles, progress, shutdown)
+      await runPhase(opencode.client, workspace, phase, options, extraFiles, projectContextFiles, progress, shutdown)
       if (phase.name === "implementer") await runHumanReviewGate(workspace, options, opencode.url, progress)
     }
 
@@ -192,6 +195,7 @@ async function runPhase(
   phase: Phase,
   options: RunOptions,
   extraFiles: FilePartInput[],
+  projectContextFiles: string[],
   progress: ProgressUI,
   shutdown: RunShutdown,
 ) {
@@ -199,7 +203,7 @@ async function runPhase(
   log.section(`${phase.name} - ${phase.description}`)
 
   try {
-    const prepared = await preparePhaseRun(workspace, phase, options, extraFiles)
+    const prepared = await preparePhaseRun(workspace, phase, options, extraFiles, projectContextFiles)
     const baseline = await createCleanRepoSnapshot(options.targetDir)
     const assistantText = await runPhaseWithRetries(client, workspace, phase, options.targetDir, prepared, baseline, progress, shutdown)
 
@@ -221,7 +225,13 @@ type PreparedPhaseRun = {
 
 type ModelSelection = { providerID: string; modelID: string; variant?: string }
 
-async function preparePhaseRun(workspace: Workspace, phase: Phase, options: RunOptions, extraFiles: FilePartInput[]): Promise<PreparedPhaseRun> {
+async function preparePhaseRun(
+  workspace: Workspace,
+  phase: Phase,
+  options: RunOptions,
+  extraFiles: FilePartInput[],
+  projectContextFiles: string[],
+): Promise<PreparedPhaseRun> {
   const inputs = [...phase.inputFiles]
   if (phase.inputDiff) {
     const diffRel = join("diffs", `${phase.name}.pre.diff`)
@@ -231,12 +241,22 @@ async function preparePhaseRun(workspace: Workspace, phase: Phase, options: RunO
   }
 
   const phaseFiles = await fileParts(inputs, workspace.dir, "skip")
-  const attachments = [...phaseFiles, ...extraFiles]
+  const contextFiles = await projectContextFileParts(projectContextFiles, options.targetDir)
+  const attachments = [...contextFiles, ...phaseFiles, ...extraFiles]
   const prompt = buildPhasePrompt(workspace, phase)
   const model = selectedModel(phase, options.modelOverride)
   const maxAttempts = Math.max(1, options.maxAttempts)
 
   return { attachments, prompt, model, maxAttempts }
+}
+
+async function projectContextFileParts(paths: string[], targetDir: string) {
+  const out: FilePartInput[] = []
+  for (const path of paths) {
+    const parts = await fileParts([path], targetDir, "skip")
+    out.push(...parts.map((part) => ({ ...part, filename: path })))
+  }
+  return out
 }
 
 async function runPhaseWithRetries(
@@ -688,7 +708,11 @@ function buildPhasePrompt(workspace: Workspace, phase: Phase) {
     "- Working directory: the directory where `archer` was invoked (root of the target repo).",
     "",
     "## Attachments",
-    "You will receive as file attachments: the original PRD, previous phase reports, the cumulative diff against the base branch, and any `--file` passed by the user. Read them before acting.",
+    "You will receive as file attachments: project context files when present, the original PRD, previous phase reports, the cumulative diff against the base branch, and any `--file` passed by the user. Read them before acting.",
+    "",
+    "## Project context",
+    "Archer automatically attaches these target-repo files when they exist: `.archer/rules.md`, `AGENTS.md`, and `CLAUDE.md`.",
+    "Read them before making changes. `.archer/rules.md` is the project-specific Archer contract unless it conflicts with Archer runtime safety guard rails.",
     "",
     "## Closing",
     "Before finishing, make sure to:",
