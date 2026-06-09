@@ -6,6 +6,26 @@ import type { Phase } from "./types"
 
 export type ProgressPhase = Pick<Phase, "name" | "description">
 
+export type ProgressTokens = {
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+}
+
+export type ProgressUsage = {
+  sessionID?: string
+  cost?: number
+  tokens?: ProgressTokens
+  model?: string
+}
+
+export type ProgressStepUsage = ProgressUsage & {
+  stepID?: string
+}
+
 export type ProgressUI = {
   start(runID: string, targetDir: string): void
   serverReady(url: string): void
@@ -13,6 +33,8 @@ export type ProgressUI = {
   phaseRunning(name: string, detail?: string): void
   phaseSession(name: string, sessionID: string): void
   phaseActivity(name: string, detail: string): void
+  phaseStepUsage(name: string, usage: ProgressStepUsage): void
+  phaseUsageTotal(name: string, usage: ProgressUsage): void
   phaseCompleted(name: string, detail?: string): void
   phaseSkipped(name: string): void
   phaseFailed(name: string, detail?: string): void
@@ -28,7 +50,25 @@ type PhaseState = ProgressPhase & {
   status: PhaseStatus
   detail: string
   sessionID: string
+  cost: number
+  tokens: ProgressTokens
+  stepCount: number
+  lastStepCost?: number
+  lastStepTokens?: ProgressTokens
+  lastStepModel: string
+  usageReported: boolean
+  usageSessions: Map<string, UsageSessionState>
+  seenStepIDs: Set<string>
   updatedAt: number
+}
+
+type UsageSessionState = {
+  cost: number
+  tokens: ProgressTokens
+  steps: number
+  model: string
+  reported: boolean
+  totalReported: boolean
 }
 
 type ActivityEntry = {
@@ -47,6 +87,8 @@ export const noopProgress: ProgressUI = {
   phaseRunning() {},
   phaseSession() {},
   phaseActivity() {},
+  phaseStepUsage() {},
+  phaseUsageTotal() {},
   phaseCompleted() {},
   phaseSkipped() {},
   phaseFailed() {},
@@ -126,7 +168,20 @@ class OpenTuiProgress implements ProgressUI {
     phases: readonly ProgressPhase[],
     private readonly onAbort?: () => void,
   ) {
-    this.phases = phases.map((phase) => ({ ...phase, status: "pending", detail: "", sessionID: "", updatedAt: Date.now() }))
+    this.phases = phases.map((phase) => ({
+      ...phase,
+      status: "pending",
+      detail: "",
+      sessionID: "",
+      cost: 0,
+      tokens: emptyTokens(),
+      stepCount: 0,
+      lastStepModel: "",
+      usageReported: false,
+      usageSessions: new Map<string, UsageSessionState>(),
+      seenStepIDs: new Set<string>(),
+      updatedAt: Date.now(),
+    }))
 
     const shell = new Box(renderer, {
       id: "archer-shell",
@@ -266,6 +321,44 @@ class OpenTuiProgress implements ProgressUI {
     this.addEvent(name, detail)
   }
 
+  phaseStepUsage(name: string, usage: ProgressStepUsage) {
+    const phase = this.findPhase(name)
+    if (!phase || isDuplicateStep(phase, usage.stepID)) return
+
+    const session = this.usageSession(phase, usage.sessionID)
+    if (!session.totalReported) {
+      session.cost += safeCost(usage.cost)
+      if (usage.tokens) session.tokens = addTokens(session.tokens, usage.tokens)
+    }
+    session.steps += 1
+    session.model = usage.model || session.model
+    session.reported = true
+
+    phase.lastStepCost = typeof usage.cost === "number" ? usage.cost : undefined
+    phase.lastStepTokens = usage.tokens
+    phase.lastStepModel = usage.model || phase.lastStepModel
+    phase.updatedAt = Date.now()
+    this.recalculateUsage(phase)
+    this.render()
+  }
+
+  phaseUsageTotal(name: string, usage: ProgressUsage) {
+    const phase = this.findPhase(name)
+    if (!phase) return
+
+    const session = this.usageSession(phase, usage.sessionID)
+    if (typeof usage.cost === "number") session.cost = safeCost(usage.cost)
+    if (usage.tokens) session.tokens = cloneTokens(usage.tokens)
+    session.model = usage.model || session.model
+    session.reported = true
+    session.totalReported = true
+
+    if (usage.model) phase.lastStepModel = usage.model
+    phase.updatedAt = Date.now()
+    this.recalculateUsage(phase)
+    this.render()
+  }
+
   phaseCompleted(name: string, detail = "") {
     this.setPhase(name, "completed", detail || "done")
     this.addEvent(name, detail || "phase completed")
@@ -352,6 +445,33 @@ class OpenTuiProgress implements ProgressUI {
     if (this.recent.length > 80) this.recent.splice(0, this.recent.length - 80)
   }
 
+  private usageSession(phase: PhaseState, sessionID?: string) {
+    const key = sessionID || phase.sessionID || "phase"
+    const existing = phase.usageSessions.get(key)
+    if (existing) return existing
+
+    const created: UsageSessionState = { cost: 0, tokens: emptyTokens(), steps: 0, model: "", reported: false, totalReported: false }
+    phase.usageSessions.set(key, created)
+    return created
+  }
+
+  private recalculateUsage(phase: PhaseState) {
+    let cost = 0
+    let tokens = emptyTokens()
+    let stepCount = 0
+    let usageReported = false
+    for (const session of phase.usageSessions.values()) {
+      cost += session.cost
+      tokens = addTokens(tokens, session.tokens)
+      stepCount += session.steps
+      usageReported ||= session.reported
+    }
+    phase.cost = cost
+    phase.tokens = tokens
+    phase.stepCount = stepCount
+    phase.usageReported = usageReported
+  }
+
   private render() {
     if (this.renderer.isDestroyed) return
     const now = Date.now()
@@ -361,11 +481,17 @@ class OpenTuiProgress implements ProgressUI {
     const spinner = active?.status === "running" ? `${spinnerFrame(now)} ` : ""
     const current = active ? `${spinner}${active.name}: ${active.detail || active.status}` : this.status
     const width = Math.max(40, this.renderer.width - 8)
+    const runUsage = totalUsage(this.phases)
 
     this.headerText.content = [
       `Sequential agent pipeline for feature work`,
       truncate(current, width),
-      `run ${this.runID || "pending"} | ${done}/${total} phases | elapsed ${formatElapsed(now - this.startedAt)} | last event ${formatAgo(now - this.lastActivityAt)}`,
+      truncate(
+        `run ${this.runID || "pending"} | ${done}/${total} phases | cost ${formatMoney(runUsage.cost)} | tokens ${formatTokenPair(
+          runUsage.tokens,
+        )} | elapsed ${formatElapsed(now - this.startedAt)} | last event ${formatAgo(now - this.lastActivityAt)}`,
+        width,
+      ),
       truncate(`target ${this.targetDir || process.cwd()}`, width),
       this.serverUrl ? truncate(`opencode ${this.serverUrl}`, width) : "opencode starting",
     ].join("\n")
@@ -400,7 +526,11 @@ function panel(Box: BoxCtor, Text: TextCtor, renderer: CliRenderer, options: Box
 function phaseLine(phase: PhaseState) {
   const marker = phase.status === "completed" ? "[OK]" : phase.status === "running" ? "[RUN]" : phase.status === "failed" ? "[ERR]" : phase.status === "skipped" ? "[SKIP]" : "[ ]"
   const session = phase.sessionID ? ` ${shortID(phase.sessionID)}` : ""
-  const detail = phase.detail ? `\n     ${truncate(phase.detail, 30)}` : ""
+  const detailParts: string[] = []
+  if (phase.usageReported) detailParts.push(`cost ${formatMoney(phase.cost)}`)
+  if (phase.stepCount > 0) detailParts.push(`${phase.stepCount} ${plural(phase.stepCount, "step")}`)
+  if (phase.detail) detailParts.push(truncate(phase.detail, phase.usageReported ? 18 : 30))
+  const detail = detailParts.length > 0 ? `\n     ${truncate(detailParts.join(" | "), 32)}` : ""
   return `${marker} ${phase.name.padEnd(13)} ${phase.status}${session}${detail}`
 }
 
@@ -414,6 +544,14 @@ function detailLines(active: PhaseState | undefined, recent: ActivityEntry[], no
     `phase       ${active.name}`,
     `state       ${active.status}`,
     `session     ${active.sessionID || "creating..."}`,
+    `cost        ${active.usageReported ? formatMoney(active.cost) : "not reported yet"}`,
+    `tokens      ${active.usageReported ? formatTokens(active.tokens) : "not reported yet"}`,
+    `steps       ${formatStepCount(active)}`,
+    ...(active.lastStepCost !== undefined || active.lastStepTokens
+      ? [`last step   ${formatLastStep(active)}`]
+      : active.lastStepModel
+        ? [`last model  ${active.lastStepModel}`]
+        : []),
     `updated     ${formatAgo(now - active.updatedAt)}`,
     `activity    ${truncate(active.detail || "waiting for OpenCode event", width - 12)}`,
     "",
@@ -426,6 +564,80 @@ function eventLines(recent: ActivityEntry[], width: number) {
   const events = recent.slice(-12).reverse()
   if (events.length === 0) return ["Waiting for live events..."]
   return events.map((entry) => `${formatTime(entry.time)} ${entry.phase.padEnd(13)} ${truncate(entry.message, width - 22)}`)
+}
+
+function emptyTokens(): ProgressTokens {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+}
+
+function cloneTokens(tokens: ProgressTokens): ProgressTokens {
+  return { ...tokens }
+}
+
+function addTokens(left: ProgressTokens, right: ProgressTokens): ProgressTokens {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    reasoning: left.reasoning + right.reasoning,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    total: left.total + right.total,
+  }
+}
+
+function totalUsage(phases: PhaseState[]) {
+  return phases.reduce(
+    (usage, phase) => ({ cost: usage.cost + phase.cost, tokens: addTokens(usage.tokens, phase.tokens) }),
+    { cost: 0, tokens: emptyTokens() },
+  )
+}
+
+function isDuplicateStep(phase: PhaseState, stepID?: string) {
+  if (!stepID) return false
+  if (phase.seenStepIDs.has(stepID)) return true
+  phase.seenStepIDs.add(stepID)
+  return false
+}
+
+function safeCost(cost: number | undefined) {
+  return typeof cost === "number" && Number.isFinite(cost) ? cost : 0
+}
+
+function formatStepCount(phase: PhaseState) {
+  if (phase.stepCount > 0) return `${phase.stepCount} ${plural(phase.stepCount, "step")}`
+  return phase.usageReported ? "reported as phase total" : "0"
+}
+
+function formatLastStep(phase: PhaseState) {
+  const parts: string[] = []
+  if (phase.lastStepCost !== undefined) parts.push(formatMoney(phase.lastStepCost))
+  if (phase.lastStepTokens) parts.push(formatTokenPair(phase.lastStepTokens))
+  if (phase.lastStepModel) parts.push(phase.lastStepModel)
+  return parts.join(" | ")
+}
+
+function formatMoney(cost: number) {
+  return `$${cost.toFixed(cost >= 1 ? 2 : 4)}`
+}
+
+function formatTokens(tokens: ProgressTokens) {
+  const cache = tokens.cacheRead || tokens.cacheWrite ? `, cache ${formatCount(tokens.cacheRead)}/${formatCount(tokens.cacheWrite)}` : ""
+  const reasoning = tokens.reasoning ? `, reason ${formatCount(tokens.reasoning)}` : ""
+  return `in/out ${formatCount(tokens.input)}/${formatCount(tokens.output)}${reasoning}${cache}`
+}
+
+function formatTokenPair(tokens: ProgressTokens) {
+  return `${formatCount(tokens.input)}/${formatCount(tokens.output)}`
+}
+
+function formatCount(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return String(value)
+}
+
+function plural(count: number, word: string) {
+  return count === 1 ? word : `${word}s`
 }
 
 function progressBar(done: number, total: number, width: number) {

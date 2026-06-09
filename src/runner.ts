@@ -11,7 +11,7 @@ import { log } from "./log"
 import { startOpencode } from "./opencode"
 import { startPermissionGate, type PermissionGate } from "./permissions"
 import { phases } from "./phases"
-import { createProgressUI, noopProgress, type ProgressPhase, type ProgressUI } from "./progress"
+import { createProgressUI, noopProgress, type ProgressPhase, type ProgressStepUsage, type ProgressTokens, type ProgressUI, type ProgressUsage } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { Phase, RunOptions } from "./types"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
@@ -331,6 +331,8 @@ async function runPhaseAttempt(
     model: prepared.model,
     attachments: prepared.attachments.map((file) => ({ filename: file.filename, mime: file.mime, url: file.url })),
     finish: result.info.finish,
+    cost: result.info.cost,
+    tokens: result.info.tokens,
     error: result.info.error,
     text: assistantText,
   })
@@ -417,6 +419,11 @@ async function promptPhase(
     input.shutdown.throwIfRequested()
     if (response.error) throw new Error(formatSdkError(response.error))
     if (!response.data) throw new Error("opencode didn't return response")
+    const usage = assistantUsage(response.data.info, session.data.id)
+    if (usage) {
+      input.progress.phaseUsageTotal(input.phase.name, usage)
+      log.info(`[${input.phase.name}] usage: ${formatUsageForLog(usage)}`)
+    }
     return response.data
   } finally {
     if (input.shutdown.aborted) await input.shutdown.abortActiveSession(input.progress)
@@ -433,10 +440,18 @@ type ActivityState = {
   reasoningChars: number
   textChars: number
   textTail: string
+  currentStepModel: string
   lastReasoningUpdate: number
   lastTextUpdate: number
   lastServerEvent: number
 }
+
+type ActivityDescription =
+  | string
+  | {
+      message: string
+      stepUsage?: ProgressStepUsage
+    }
 
 const serverHeartbeatMs = 30_000
 
@@ -452,6 +467,7 @@ async function startSessionActivityMonitor(
     reasoningChars: 0,
     textChars: 0,
     textTail: "",
+    currentStepModel: "",
     lastReasoningUpdate: 0,
     lastTextUpdate: 0,
     lastServerEvent: Date.now(),
@@ -489,7 +505,12 @@ async function startSessionActivityMonitor(
           if (!payloadMatchesSession(payload, sessionID)) continue
           state.lastServerEvent = Date.now()
           const activity = describeSessionActivity(payload, state)
-          if (activity) progress.phaseActivity(phaseName, activity)
+          if (typeof activity === "string") {
+            progress.phaseActivity(phaseName, activity)
+          } else if (activity) {
+            if (activity.stepUsage) progress.phaseStepUsage(phaseName, activity.stepUsage)
+            progress.phaseActivity(phaseName, activity.message)
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) progress.phaseActivity(phaseName, `event stream stopped: ${formatSdkError(error)}`)
@@ -540,7 +561,7 @@ function payloadMatchesSession(payload: unknown, sessionID: string) {
   return properties?.sessionID === sessionID
 }
 
-function describeSessionActivity(payload: unknown, state: ActivityState) {
+function describeSessionActivity(payload: unknown, state: ActivityState): ActivityDescription | undefined {
   const type = payloadType(payload)
   const properties = payloadProperties(payload)
   if (!properties) return undefined
@@ -550,9 +571,13 @@ function describeSessionActivity(payload: unknown, state: ActivityState) {
     case "session.next.prompted":
       return "prompt submitted"
     case "session.next.step.started":
-      return `thinking with ${formatModelFromEvent(properties.model)}`
-    case "session.next.step.ended":
-      return `step finished: ${pickString(properties, ["finish"]) || "complete"}${formatCost(properties)}`
+      state.currentStepModel = formatModelFromEvent(properties.model)
+      return `thinking with ${state.currentStepModel}`
+    case "session.next.step.ended": {
+      const message = `step finished: ${pickString(properties, ["finish"]) || "complete"}${formatCost(properties)}`
+      const stepUsage = stepUsageFromEvent(payload, properties, state.currentStepModel)
+      return stepUsage ? { message, stepUsage } : message
+    }
     case "session.next.step.failed":
       return `step failed: ${formatEventError(properties.error)}`
     case "session.status":
@@ -635,12 +660,77 @@ function formatModelFromEvent(value: unknown) {
 }
 
 function formatCost(properties: Record<string, unknown>) {
-  const tokens = properties.tokens
+  const tokens = tokensFromValue(properties.tokens)
   const cost = typeof properties.cost === "number" ? `, $${properties.cost.toFixed(4)}` : ""
-  if (!tokens || typeof tokens !== "object") return cost
-  const input = typeof (tokens as { input?: unknown }).input === "number" ? (tokens as { input: number }).input : 0
-  const output = typeof (tokens as { output?: unknown }).output === "number" ? (tokens as { output: number }).output : 0
-  return `, tokens ${input}/${output}${cost}`
+  if (!tokens) return cost
+  const reasoning = tokens.reasoning ? `/${tokens.reasoning}` : ""
+  return `, tokens ${tokens.input}/${tokens.output}${reasoning}${cost}`
+}
+
+function stepUsageFromEvent(payload: unknown, properties: Record<string, unknown>, model: string): ProgressStepUsage | undefined {
+  const usage = usageFromRecord(properties)
+  if (!usage) return undefined
+  return {
+    ...usage,
+    stepID: payloadID(payload),
+    sessionID: typeof properties.sessionID === "string" ? properties.sessionID : undefined,
+    model: model || usage.model,
+  }
+}
+
+function assistantUsage(info: unknown, fallbackSessionID: string): ProgressUsage | undefined {
+  if (!info || typeof info !== "object") return undefined
+  const values = info as Record<string, unknown>
+  const usage = usageFromRecord(values)
+  if (!usage) return undefined
+  const modelObject = values.model && typeof values.model === "object" ? (values.model as Record<string, unknown>) : {}
+  const provider = typeof values.providerID === "string" ? values.providerID : typeof modelObject.providerID === "string" ? modelObject.providerID : ""
+  const modelID = typeof values.modelID === "string" ? values.modelID : typeof modelObject.modelID === "string" ? modelObject.modelID : typeof modelObject.id === "string" ? modelObject.id : ""
+  const variantValue = typeof values.variant === "string" ? values.variant : typeof modelObject.variant === "string" ? modelObject.variant : ""
+  const variant = variantValue ? `#${variantValue}` : ""
+  const model = provider && modelID ? `${provider}/${modelID}${variant}` : usage.model
+  return {
+    ...usage,
+    sessionID: typeof values.sessionID === "string" ? values.sessionID : fallbackSessionID,
+    model,
+  }
+}
+
+function usageFromRecord(values: Record<string, unknown>): ProgressUsage | undefined {
+  const cost = typeof values.cost === "number" && Number.isFinite(values.cost) ? values.cost : undefined
+  const tokens = tokensFromValue(values.tokens)
+  if (cost === undefined && !tokens) return undefined
+  return { cost, tokens }
+}
+
+function tokensFromValue(value: unknown): ProgressTokens | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const tokens = value as Record<string, unknown>
+  const input = numberToken(tokens.input)
+  const output = numberToken(tokens.output)
+  const reasoning = numberToken(tokens.reasoning)
+  const cache = tokens.cache && typeof tokens.cache === "object" ? (tokens.cache as Record<string, unknown>) : {}
+  const cacheRead = numberToken(cache.read)
+  const cacheWrite = numberToken(cache.write)
+  const total = typeof tokens.total === "number" && Number.isFinite(tokens.total) ? tokens.total : input + output + reasoning
+  return { input, output, reasoning, cacheRead, cacheWrite, total }
+}
+
+function numberToken(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
+function payloadID(payload: unknown) {
+  if (!payload || typeof payload !== "object") return undefined
+  const id = (payload as { id?: unknown }).id
+  return typeof id === "string" ? id : undefined
+}
+
+function formatUsageForLog(usage: ProgressUsage) {
+  const cost = typeof usage.cost === "number" ? `$${usage.cost.toFixed(4)}` : "cost unavailable"
+  const tokens = usage.tokens ? `tokens ${usage.tokens.input}/${usage.tokens.output}${usage.tokens.reasoning ? `/${usage.tokens.reasoning}` : ""}` : "tokens unavailable"
+  const model = usage.model ? ` model ${usage.model}` : ""
+  return `${cost}, ${tokens}${model}`
 }
 
 function formatSessionStatus(value: unknown) {
