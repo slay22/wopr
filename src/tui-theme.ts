@@ -285,6 +285,15 @@ export function projectName(dir: string) {
   return parts[parts.length - 1] ?? dir
 }
 
+/** Full path with the home prefix as ~, truncated from the left so the deepest segments stay readable. */
+export function shortPath(dir: string, max: number) {
+  if (!dir) return "…"
+  const home = process.env.HOME
+  const path = home && dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir
+  if (path.length <= max) return path
+  return `…${path.slice(-Math.max(1, max - 1))}`
+}
+
 export function truncate(value: string, max: number) {
   const singleLine = value.replace(/\s+/g, " ").trim()
   if (singleLine.length <= max) return singleLine

@@ -22,10 +22,10 @@ import {
   paletteForTerminal,
   plain,
   progressBar,
-  projectName,
   raw,
   setTheme,
   shortID,
+  shortPath,
   shortUrl,
   spinnerFrame,
   statusIcon,
@@ -41,6 +41,7 @@ import type {
   AutoAccept,
   PermissionPromptInfo,
   PermissionReply,
+  ProgressAttempt,
   ProgressDiffSummary,
   ProgressPhase,
   ProgressPhaseSnapshot,
@@ -91,8 +92,11 @@ type UsageSessionState = {
 
 type PhaseState = ProgressPhase & {
   status: PhaseStatus
-  detail: string
   sessionID: string
+  attempt: number
+  maxAttempts: number
+  /** Model requested for the attempt; lastStepModel (from usage events) wins when present. */
+  model: string
   cost: number
   tokens: ProgressTokens
   stepCount: number
@@ -144,7 +148,6 @@ export class TuiProgress implements ProgressUI {
   private runID = ""
   private targetDir = ""
   private serverUrl = ""
-  private status = "starting"
   private activePhase = ""
   private lastActivityAt = Date.now()
   private readonly startedAt = Date.now()
@@ -153,6 +156,8 @@ export class TuiProgress implements ProgressUI {
   private readonly ticker: ReturnType<typeof setInterval>
   private readonly headerText: TextRenderable
   private readonly pipelineText: TextRenderable
+  private readonly stepBox: BoxRenderable
+  private readonly stepText: TextRenderable
   private readonly feedText: TextRenderable
   private readonly footerText: TextRenderable
   // Rebuilt on every pipeline render: panel row index → phase name, so clicks
@@ -212,8 +217,10 @@ export class TuiProgress implements ProgressUI {
     this.phases = phases.map((phase) => ({
       ...phase,
       status: "pending",
-      detail: "",
       sessionID: "",
+      attempt: 0,
+      maxAttempts: 0,
+      model: "",
       cost: 0,
       tokens: emptyTokens(),
       stepCount: 0,
@@ -270,13 +277,39 @@ export class TuiProgress implements ProgressUI {
     })
     pipeline.text.onMouseDown = openFromPipeline
 
+    const right = new BoxRenderable(renderer, {
+      id: "archer-right",
+      height: "100%",
+      flexGrow: 1,
+      flexDirection: "column",
+      gap: 0,
+    })
+
+    const openFromStep = (event: { preventDefault(): void; stopPropagation(): void }) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.openActiveSessionWindow("click")
+    }
+
+    const step = this.panel({
+      id: "archer-step",
+      width: "100%",
+      height: 8,
+      borderColor: theme.borderDim,
+      backgroundColor: theme.bg,
+      title: " current step ",
+      titleAlignment: "left",
+      onMouseDown: openFromStep,
+    })
+    step.text.onMouseDown = openFromStep
+
     const feed = this.panel({
       id: "archer-feed",
-      height: "100%",
+      width: "100%",
       flexGrow: 1,
       borderColor: theme.borderDim,
       backgroundColor: theme.bg,
-      title: " activity ",
+      title: " logs ",
       titleAlignment: "left",
     })
 
@@ -297,6 +330,8 @@ export class TuiProgress implements ProgressUI {
 
     this.headerText = header.text
     this.pipelineText = pipeline.text
+    this.stepBox = step.box
+    this.stepText = step.text
     this.feedText = feed.text
     this.footerText = footer.text
 
@@ -304,12 +339,15 @@ export class TuiProgress implements ProgressUI {
       { box: shell, background: "bg" },
       { box: header.box, background: "bg", border: "border" },
       { box: pipeline.box, background: "bg", border: "borderDim" },
+      { box: step.box, background: "bg", border: "borderDim" },
       { box: feed.box, background: "bg", border: "borderDim" },
       { box: footer.box, background: "bg", border: "borderDim" },
     )
 
     body.add(pipeline.box)
-    body.add(feed.box)
+    right.add(step.box)
+    right.add(feed.box)
+    body.add(right)
     shell.add(header.box)
     shell.add(body)
     shell.add(footer.box)
@@ -356,26 +394,40 @@ export class TuiProgress implements ProgressUI {
   start(runID: string, targetDir: string) {
     this.runID = runID
     this.targetDir = targetDir
-    this.status = "booting opencode"
     this.addEvent("archer", "system", `run ${runID} started`)
     this.render()
   }
 
   serverReady(url: string) {
     this.serverUrl = url
-    this.status = "opencode ready"
     this.addEvent("archer", "system", `opencode server at ${url}`)
     this.render()
   }
 
   phaseStarted(name: string, detail = "") {
-    this.setPhase(name, "running", detail || "started")
+    this.setPhase(name, "running")
     this.addEvent(name, "system", detail || "phase started")
   }
 
   phaseRunning(name: string, detail = "") {
-    this.setPhase(name, "running", detail)
-    if (detail) this.addEvent(name, "info", detail)
+    this.setPhase(name, "running")
+    if (!detail) return
+    const phase = this.findPhase(name)
+    if (phase) phase.now = { kind: "info", message: detail }
+    this.addEvent(name, "info", detail)
+    this.render()
+  }
+
+  phaseAttempt(name: string, info: ProgressAttempt) {
+    const phase = this.findPhase(name)
+    if (!phase) return
+    phase.attempt = info.attempt
+    phase.maxAttempts = info.maxAttempts
+    if (info.model) phase.model = info.model
+    phase.updatedAt = Date.now()
+    this.activePhase = name
+    this.addEvent(name, "step", `attempt ${info.attempt}/${info.maxAttempts}${info.model ? ` · ${info.model}` : ""}`)
+    this.render()
   }
 
   phaseSession(name: string, sessionID: string) {
@@ -394,7 +446,6 @@ export class TuiProgress implements ProgressUI {
     phase.now = { kind, message: detail }
     phase.updatedAt = Date.now()
     this.activePhase = name
-    this.status = `${name}: ${detail}`
     if (pulse) this.lastActivityAt = Date.now()
     else this.addEvent(name, kind, detail)
     this.render()
@@ -453,17 +504,17 @@ export class TuiProgress implements ProgressUI {
   }
 
   phaseCompleted(name: string, detail = "") {
-    this.setPhase(name, "completed", detail || "done")
+    this.setPhase(name, "completed")
     this.addEvent(name, "system", detail || "phase completed")
   }
 
   phaseSkipped(name: string) {
-    this.setPhase(name, "skipped", "skipped")
+    this.setPhase(name, "skipped")
     this.addEvent(name, "system", "skipped by flag")
   }
 
   phaseFailed(name: string, detail = "") {
-    this.setPhase(name, "failed", detail || "failed")
+    this.setPhase(name, "failed")
     this.addEvent(name, "error", detail || "failed")
   }
 
@@ -473,7 +524,6 @@ export class TuiProgress implements ProgressUI {
     // Written directly instead of via setPhase: a restored phase must not
     // claim the active slot or reset the quiet timer of the live run.
     phase.status = snapshot.status
-    phase.detail = "restored from previous run"
     phase.sessionID = snapshot.sessionID ?? ""
     phase.restoredDurationMs = snapshot.durationMs
     if (snapshot.cost !== undefined || snapshot.tokens) {
@@ -514,7 +564,6 @@ export class TuiProgress implements ProgressUI {
   }
 
   message(message: string) {
-    this.status = message
     this.addEvent("archer", "system", message)
     this.render()
   }
@@ -668,16 +717,14 @@ export class TuiProgress implements ProgressUI {
     this.render()
   }
 
-  private setPhase(name: string, status: PhaseStatus, detail: string) {
+  private setPhase(name: string, status: PhaseStatus) {
     const phase = this.findPhase(name)
     if (!phase) return
     if (status === "running" && phase.startedAt === undefined) phase.startedAt = Date.now()
     if (status === "completed" || status === "failed" || status === "skipped") phase.endedAt = Date.now()
     phase.status = status
-    phase.detail = detail
     phase.updatedAt = Date.now()
     this.activePhase = name
-    this.status = `${name}: ${detail || status}`
     this.lastActivityAt = Date.now()
     this.render()
   }
@@ -736,54 +783,35 @@ export class TuiProgress implements ProgressUI {
     const innerWidth = Math.max(40, this.renderer.width - 6)
     const rightWidth = Math.max(40, this.renderer.width - pipelineWidth - 9)
 
+    // Body rows left after the header (4) and footer (3); the step panel grows
+    // with its content (todos) but never starves the logs below it.
+    const bodyHeight = Math.max(8, this.renderer.height - 7)
+    const stepLines = this.stepContent(active, now, rightWidth, Math.max(8, Math.floor(bodyHeight * 0.6) - 2))
+    this.stepBox.height = stepLines.length + 2
+
     this.headerText.content = this.headerContent(now, innerWidth)
     this.pipelineText.content = this.pipelineContent(now)
-    this.feedText.content = this.activityContent(active, now, rightWidth)
+    this.stepText.content = joinLines(stepLines)
+    this.feedText.content = joinLines(this.feedLines(rightWidth, Math.max(3, bodyHeight - stepLines.length - 4)))
     this.footerText.content = this.footerContent(now, innerWidth)
     this.renderPermissionModal()
     this.renderer.requestRender()
   }
 
+  // Header owns the session-wide identity and totals: working directory,
+  // elapsed time, cost, and tokens. Phase status lives in the pipeline panel.
   private headerContent(now: number, width: number) {
     const usage = totalUsage(this.phases)
-    const done = this.phases.filter((phase) => phase.status === "completed" || phase.status === "skipped").length
-    const failed = this.phases.some((phase) => phase.status === "failed")
-    const finished = this.phases.length > 0 && done === this.phases.length
-
-    const title: TextChunk[] = [
-      bold(fg(theme.accent)("◆ archer")),
-      fg(theme.faint)("  ·  "),
-      fg(theme.text)(truncate(projectName(this.targetDir), 28)),
-    ]
-    const line1 = padBetween(title, this.stateChunks(now), width)
-
-    const barWidth = Math.max(16, Math.min(48, Math.floor(width * 0.42)))
-    const barColor = failed ? theme.red : finished ? theme.green : theme.accent
-    const line2 = new StyledText([
-      ...progressBar(this.overallFraction(), barWidth, barColor),
-      raw("  "),
-      fg(theme.text)(`${done}/${this.phases.length}`),
-      fg(theme.dim)(" phases"),
-      fg(theme.faint)("  ·  "),
+    const totals: TextChunk[] = [
       fg(theme.text)(formatElapsed(now - this.startedAt)),
       fg(theme.faint)("  ·  "),
       fg(theme.green)(formatMoney(usage.cost)),
       fg(theme.faint)("  ·  "),
-      fg(theme.dim)(`↑${formatCount(usage.tokens.input)} ↓${formatCount(usage.tokens.output)}`),
-    ])
+      fg(theme.dim)(`↑${formatCount(usage.tokens.input)} ↓${formatCount(usage.tokens.output)} tokens`),
+    ]
+    const line1 = padBetween([bold(fg(theme.accent)("◆ archer"))], totals, width)
+    const line2 = t`${fg(theme.dim)("dir ")}${fg(theme.text)(shortPath(this.targetDir, width - 4))}`
     return joinLines([line1, line2])
-  }
-
-  private stateChunks(now: number): TextChunk[] {
-    if (this.permissionQueue.length > 0) return [bold(fg(theme.yellow)("⚿ waiting for your approval"))]
-    const failed = this.phases.find((phase) => phase.status === "failed")
-    if (failed) return [bold(fg(theme.red)(`✗ ${failed.name} failed`))]
-    const running = this.phases.find((phase) => phase.status === "running")
-    if (running) return [fg(theme.accent)(`${spinnerFrame(now)} `), bold(fg(theme.text)(running.name)), fg(theme.dim)(" running")]
-    if (this.phases.length > 0 && this.phases.every((phase) => phase.status === "completed" || phase.status === "skipped")) {
-      return [bold(fg(theme.green)("✓ run complete"))]
-    }
-    return [fg(theme.dim)(truncate(this.status, 36))]
   }
 
   private overallFraction() {
@@ -796,44 +824,44 @@ export class TuiProgress implements ProgressUI {
     return Math.min(1, done / total)
   }
 
+  // The pipeline owns run progress: the overall bar plus one row per phase
+  // (status, elapsed, and final cost once a phase ends).
   private pipelineContent(now: number) {
     const width = pipelineWidth - 4
-    const out: StyledText[] = []
-    const rows: (string | undefined)[] = []
+    const done = this.phases.filter((phase) => phase.status === "completed" || phase.status === "skipped").length
+    const failed = this.phases.some((phase) => phase.status === "failed")
+    const finished = this.phases.length > 0 && done === this.phases.length
+    const barColor = failed ? theme.red : finished ? theme.green : theme.accent
+    const counter = ` ${done}/${this.phases.length}`
+
+    const out: StyledText[] = [
+      new StyledText([
+        ...progressBar(this.overallFraction(), Math.max(6, width - counter.length), barColor),
+        fg(theme.text)(counter),
+      ]),
+      plain(""),
+    ]
+    const rows: (string | undefined)[] = [undefined, undefined]
     for (const phase of this.phases) {
-      const isActive = phase.status === "running"
       const name =
         phase.status === "pending"
           ? fg(theme.dim)(phase.name)
           : phase.status === "skipped"
             ? fg(theme.faint)(phase.name)
-            : isActive
+            : phase.status === "running"
               ? bold(fg(theme.text)(phase.name))
               : fg(theme.text)(phase.name)
       const left: TextChunk[] = [statusIcon(phase.status, now), raw(" "), name]
       rows.push(phase.name)
       out.push(padBetween(left, phaseMetaChunks(phase, now), width))
-      if (isActive && phase.detail) {
-        rows.push(phase.name)
-        out.push(t`  ${fg(theme.faint)(truncate(phase.detail, width - 3))}`)
-      }
     }
     this.pipelineRowPhases = rows
     return joinLines(out)
   }
 
-  // The activity panel opens with a compact summary of the active phase (what
-  // the dedicated "current phase" panel used to show), then the event feed.
-  private activityContent(active: PhaseState | undefined, now: number, width: number) {
-    const summary = this.activeSummary(active, now, width)
-    // Fixed rows around the feed: header (4) + footer (3) + panel borders (2)
-    // + the separator line below the summary.
-    const visible = Math.max(4, this.renderer.height - 10 - summary.length)
-    const separator = t`${fg(theme.faint)("─".repeat(Math.max(1, width)))}`
-    return joinLines([...summary, separator, ...this.feedLines(width, visible)])
-  }
-
-  private activeSummary(active: PhaseState | undefined, now: number, width: number): StyledText[] {
+  // The current-step panel owns everything about the phase in flight: live
+  // activity, model, attempt, session usage, diff, and the expanded todo list.
+  private stepContent(active: PhaseState | undefined, now: number, width: number, maxRows: number): StyledText[] {
     if (!active) return [t`${fg(theme.dim)("waiting for the first phase to start…")}`]
 
     const out: StyledText[] = []
@@ -841,8 +869,9 @@ export class TuiProgress implements ProgressUI {
       active.status === "running"
         ? [fg(theme.accent)(`${spinnerFrame(now)} `), bold(fg(theme.text)(active.name))]
         : [statusIcon(active.status, now), raw(" "), bold(fg(theme.text)(active.name))]
-    if (active.detail) {
-      head.push(fg(theme.faint)("  ·  "), fg(theme.dim)(truncate(active.detail, Math.max(10, width - active.name.length - 8))))
+    const quiet = now - active.updatedAt
+    if (quiet > 10_000 && active.status === "running") {
+      head.push(fg(quiet > 60_000 ? theme.yellow : theme.faint)(`  ·  quiet ${Math.floor(quiet / 1000)}s`))
     }
     out.push(new StyledText(head))
 
@@ -853,28 +882,47 @@ export class TuiProgress implements ProgressUI {
         : t`${fg(theme.dim)("waiting for opencode events…")}`,
     )
 
-    if (active.todos.length > 0) out.push(todoLine(active.todos, width))
+    const meta: TextChunk[] = []
+    const model = active.lastStepModel || active.model
+    if (model) meta.push(fg(theme.faint)("model "), fg(theme.dim)(truncate(model, 30)))
+    if (active.attempt > 0) {
+      if (meta.length > 0) meta.push(fg(theme.faint)(" · "))
+      meta.push(fg(theme.faint)("attempt "), fg(active.attempt > 1 ? theme.yellow : theme.dim)(`${active.attempt}/${active.maxAttempts}`))
+    }
+    if (active.sessionID) {
+      if (meta.length > 0) meta.push(fg(theme.faint)(" · "))
+      meta.push(fg(theme.faint)(shortID(active.sessionID)))
+    }
+    if (meta.length > 0) out.push(new StyledText(meta))
+
+    out.push(
+      new StyledText([
+        fg(theme.faint)("cost "),
+        fg(theme.dim)(active.usageReported ? formatMoney(active.cost) : "—"),
+        fg(theme.faint)(" · tokens "),
+        fg(theme.dim)(active.usageReported ? `↑${formatCount(active.tokens.input)} ↓${formatCount(active.tokens.output)}` : "—"),
+        fg(theme.faint)(" · steps "),
+        fg(theme.dim)(String(active.stepCount)),
+      ]),
+    )
+
     if (active.diff && active.diff.files > 0) {
       out.push(
         t`${fg(theme.dim)("changes ")}${fg(theme.text)(`${active.diff.files} files`)} ${fg(theme.green)(`+${active.diff.additions}`)} ${fg(theme.red)(`−${active.diff.deletions}`)}`,
       )
     }
 
-    const quiet = now - active.updatedAt
-    const stats: TextChunk[] = [
-      fg(theme.faint)("steps "),
-      fg(theme.dim)(String(active.stepCount)),
-      fg(theme.faint)(" · cost "),
-      fg(theme.dim)(active.usageReported ? formatMoney(active.cost) : "—"),
-      fg(theme.faint)(" · tokens "),
-      fg(theme.dim)(active.usageReported ? `↑${formatCount(active.tokens.input)} ↓${formatCount(active.tokens.output)}` : "—"),
-    ]
-    if (active.lastStepModel) stats.push(fg(theme.faint)(` · ${truncate(active.lastStepModel, 28)}`))
-    if (active.sessionID) stats.push(fg(theme.faint)(` · ${shortID(active.sessionID)}`))
-    if (quiet > 10_000 && active.status === "running") {
-      stats.push(fg(quiet > 60_000 ? theme.yellow : theme.faint)(` · quiet ${Math.floor(quiet / 1000)}s`))
+    if (active.todos.length > 0) {
+      const completed = active.todos.filter((todo) => todo.status === "completed").length
+      out.push(
+        new StyledText([
+          fg(theme.faint)("todos "),
+          ...progressBar(completed / active.todos.length, 10, theme.teal),
+          fg(theme.text)(` ${completed}/${active.todos.length}`),
+        ]),
+      )
+      out.push(...todoLines(active.todos, Math.max(3, maxRows - out.length), width))
     }
-    out.push(new StyledText(stats))
     return out
   }
 
@@ -989,22 +1037,40 @@ function phaseMetaChunks(phase: PhaseState, now: number): TextChunk[] {
   if (elapsed !== undefined) {
     parts.push(fg(phase.status === "failed" ? theme.red : theme.dim)(formatElapsed(elapsed)))
   }
-  if (phase.usageReported) parts.push(fg(theme.faint)(` ${formatMoney(phase.cost)}`))
+  // Live cost belongs to the current-step panel; a phase's final cost lands here once it ends.
+  if (phase.usageReported && phase.status !== "running") parts.push(fg(theme.faint)(` ${formatMoney(phase.cost)}`))
   return parts
 }
 
-function todoLine(todos: ProgressTodo[], width: number): StyledText {
-  const completed = todos.filter((todo) => todo.status === "completed").length
-  const inProgress = todos.find((todo) => todo.status === "in_progress")
-  const chunks: TextChunk[] = [
-    fg(theme.faint)("todos "),
-    ...progressBar(todos.length === 0 ? 0 : completed / todos.length, 10, theme.teal),
-    fg(theme.text)(` ${completed}/${todos.length}`),
-  ]
-  if (inProgress) {
-    chunks.push(fg(theme.faint)(" · "), fg(theme.dim)(truncate(inProgress.content, Math.max(10, width - 28))))
+// One row per todo, windowed around the first unfinished item when the list
+// outgrows the panel; the edges collapse into "↑ n completed" / "↓ n more".
+function todoLines(todos: ProgressTodo[], cap: number, width: number): StyledText[] {
+  if (todos.length <= cap) return todos.map((todo) => todoRow(todo, width))
+  const firstOpen = todos.findIndex((todo) => todo.status !== "completed")
+  const anchor = firstOpen === -1 ? todos.length : firstOpen
+  const start = Math.min(anchor, todos.length - (cap - 1))
+  const head = start > 0 ? 1 : 0
+  let end = start + cap - head
+  if (end < todos.length) end -= 1
+  const out: StyledText[] = []
+  if (head > 0) out.push(t`  ${fg(theme.faint)(`↑ ${start} completed`)}`)
+  for (const todo of todos.slice(start, end)) out.push(todoRow(todo, width))
+  if (end < todos.length) out.push(t`  ${fg(theme.faint)(`↓ ${todos.length - end} more`)}`)
+  return out
+}
+
+function todoRow(todo: ProgressTodo, width: number): StyledText {
+  const text = truncate(todo.content, Math.max(10, width - 4))
+  switch (todo.status) {
+    case "completed":
+      return new StyledText([fg(theme.green)("  ✓ "), fg(theme.dim)(text)])
+    case "in_progress":
+      return new StyledText([fg(theme.accent)("  ▸ "), bold(fg(theme.text)(text))])
+    case "cancelled":
+      return new StyledText([fg(theme.faint)("  ⊘ "), fg(theme.faint)(text)])
+    default:
+      return new StyledText([fg(theme.dim)("  ○ "), fg(theme.text)(text)])
   }
-  return new StyledText(chunks)
 }
 
 function runningFraction(phase: PhaseState) {

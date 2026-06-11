@@ -328,7 +328,7 @@ async function runPhaseWithRetries(
 
   for (let attempt = 1; attempt <= prepared.maxAttempts; attempt++) {
     shutdown.throwIfRequested()
-    progress.phaseRunning(phase.name, `attempt ${attempt}/${prepared.maxAttempts} ${formatModel(prepared.model)}`)
+    progress.phaseAttempt(phase.name, { attempt, maxAttempts: prepared.maxAttempts, model: formatModel(prepared.model) })
     log.info(`[${phase.name}] attempt ${attempt}/${prepared.maxAttempts} with ${formatModel(prepared.model)}`)
     try {
       return await runPhaseAttempt(client, workspace, phase, targetDir, prepared, attempt, progress, shutdown)

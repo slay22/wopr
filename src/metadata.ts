@@ -173,6 +173,7 @@ export function recordProgress(progress: ProgressUI, store: RunMetadataStore): P
       progress.phaseStarted(name, detail)
     },
     phaseRunning: (name, detail) => progress.phaseRunning(name, detail),
+    phaseAttempt: (name, info) => progress.phaseAttempt(name, info),
     phaseSession(name, sessionID) {
       store.phaseSession(name, sessionID)
       progress.phaseSession(name, sessionID)

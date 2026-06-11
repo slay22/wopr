@@ -23,6 +23,12 @@ export type ProgressStepUsage = ProgressUsage & {
   stepID?: string
 }
 
+export type ProgressAttempt = {
+  attempt: number
+  maxAttempts: number
+  model?: string
+}
+
 export type ActivityKind =
   | "tool"
   | "bash"
@@ -82,6 +88,8 @@ export type ProgressUI = {
   serverReady(url: string): void
   phaseStarted(name: string, detail?: string): void
   phaseRunning(name: string, detail?: string): void
+  /** Structured attempt counter and model for the phase, so UIs can place them without parsing detail strings. */
+  phaseAttempt(name: string, info: ProgressAttempt): void
   phaseSession(name: string, sessionID: string): void
   /** `pulse` marks heartbeat noise (provider busy, streaming…) that updates the live status line but stays out of the activity feed. */
   phaseActivity(name: string, detail: string, kind?: ActivityKind, pulse?: boolean): void
@@ -107,6 +115,7 @@ export const noopProgress: ProgressUI = {
   serverReady() {},
   phaseStarted() {},
   phaseRunning() {},
+  phaseAttempt() {},
   phaseSession() {},
   phaseActivity() {},
   phaseStepUsage() {},
