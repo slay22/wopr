@@ -95,10 +95,12 @@ archer --prompt-file prd.md --emulator Pixel_8 --app-run-command "flutter run -d
 # and the dashboard restores their real duration, cost, and session)
 archer --resume 20260519-103045-x7q2
 
-# browse run history interactively: pick a run from the list (newest first,
-# with status, cost, and prompt), then [r]esume it, read its [s]ummary/reports,
-# or open a subshell in its run [d]ir under ~/.archer/runs (exit to return).
-# Pass a run ID to jump straight to that run's menu.
+# browse run history in the dashboard TUI: a selectable list (newest first,
+# with status, date, cost, and prompt) plus a details panel with the per-phase
+# breakdown. ↑/↓ select, [enter] resume, [s]ummary/reports overlay, subshell
+# in the run [d]ir under ~/.archer/runs (exit to return), [q]uit.
+# Pass a run ID to open the browser with that run preselected.
+# Without a TTY (pipes/CI) it falls back to a plain listing.
 archer runs
 archer runs 20260519-103045-x7q2
 
@@ -116,7 +118,7 @@ archer --prompt-file prd.md --base develop
 archer --prompt-file prd.md --include-dirty --max-attempts 1
 ```
 
-In interactive terminals, Archer shows a full-screen OpenTUI dashboard: pipeline progress with per-phase duration and cost, plus an activity panel headed by a compact summary of the active session (current tool/thinking/writing, the agent's todo list, files changed, step count, tokens, cost) above a color-coded event feed. The dashboard picks a dark or light palette from the terminal's reported background (with a neutral, background-free fallback when the terminal doesn't answer) and follows live theme changes. Press `o`, or click the footer, to open the active OpenCode session in a new terminal window attached to Archer's running OpenCode server — clicking any pipeline row opens that phase's session, including phases that already finished. Ghostty is preferred when installed; Terminal.app is the fallback (`ARCHER_TERMINAL=ghostty|terminal` forces a backend). Press `Shift+Tab` to toggle auto-accept (see the permission gate below). Press `Ctrl+C` once to abort the active OpenCode session and shut down Archer cleanly; press it again to force exit if cleanup hangs. The dashboard suspends for the whole `human-review` checkpoint — the prompts, your app command's output, and interactive OpenCode iterations own the terminal — and resumes when the gate finishes. Use `--no-tui` to fall back to plain logs.
+In interactive terminals, Archer shows a full-screen OpenTUI dashboard: pipeline progress with per-phase duration and cost, plus an activity panel headed by a compact summary of the active session (current tool/thinking/writing, the agent's todo list, files changed, step count, tokens, cost) above a color-coded event feed. The dashboard never paints backgrounds: the canvas is your terminal's own background and panels are delineated by borders alone, derived as subtle elevations of the terminal's reported background color, with dark or light accents picked by its brightness (and a neutral fallback when the terminal doesn't answer); floating modals repaint the reported color exactly to mask the content beneath them. It follows live theme changes. Press `o`, or click the footer, to open the active OpenCode session in a new terminal window attached to Archer's running OpenCode server — clicking any pipeline row opens that phase's session, including phases that already finished. Ghostty is preferred when installed; Terminal.app is the fallback (`ARCHER_TERMINAL=ghostty|terminal` forces a backend). Press `Shift+Tab` to toggle auto-accept (see the permission gate below). Press `Ctrl+C` once to abort the active OpenCode session and shut down Archer cleanly; press it again to force exit if cleanup hangs. The dashboard suspends for the whole `human-review` checkpoint — the prompts, your app command's output, and interactive OpenCode iterations own the terminal — and resumes when the gate finishes. Use `--no-tui` to fall back to plain logs.
 
 Phases run asynchronously: Archer fires the prompt with OpenCode's async API and detects completion through the event stream (`session.idle` / `session.error`), with a 30-second session-status poll as fallback and automatic event-stream reconnection. No HTTP request stays open for the duration of a phase, so long-running phases are immune to client-side socket timeouts. Archer also disables OpenCode's total provider request timeout for its default providers and keeps a 10-minute provider stream idle timeout instead.
 

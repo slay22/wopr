@@ -6,14 +6,36 @@ import {
   bold,
   createCliRenderer,
   fg,
-  stringToStyledText,
   t,
 } from "@opentui/core"
 
 import { log } from "./log"
 import { openOpencodeSessionWindow } from "./opencode"
+import {
+  formatAgo,
+  formatCount,
+  formatElapsed,
+  formatMoney,
+  formatTime,
+  joinLines,
+  padBetween,
+  paletteForTerminal,
+  plain,
+  progressBar,
+  projectName,
+  raw,
+  setTheme,
+  shortID,
+  shortUrl,
+  spinnerFrame,
+  statusIcon,
+  terminalBackgroundHex,
+  theme,
+  truncate,
+} from "./tui-theme"
 
 import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
+import type { PaletteColor, PhaseStatus } from "./tui-theme"
 import type {
   ActivityKind,
   AutoAccept,
@@ -28,101 +50,6 @@ import type {
   ProgressUI,
   ProgressUsage,
 } from "./progress"
-
-type Palette = {
-  bg: string
-  panel: string
-  panelAlt: string
-  border: string
-  borderDim: string
-  accent: string
-  teal: string
-  green: string
-  red: string
-  yellow: string
-  orange: string
-  magenta: string
-  cyan: string
-  text: string
-  dim: string
-  faint: string
-  /** Text drawn on top of colored chips (selected permission buttons). */
-  chipText: string
-}
-
-type PaletteColor = Exclude<keyof Palette, "chipText">
-
-const darkPalette: Palette = {
-  bg: "#0A0E1A",
-  panel: "#101626",
-  panelAlt: "#0D1320",
-  border: "#26324B",
-  borderDim: "#1B2438",
-  accent: "#7AA2F7",
-  teal: "#73DACA",
-  green: "#9ECE6A",
-  red: "#F7768E",
-  yellow: "#E0AF68",
-  orange: "#FF9E64",
-  magenta: "#BB9AF7",
-  cyan: "#7DCFFF",
-  text: "#C0CAF5",
-  dim: "#565F89",
-  faint: "#3B4261",
-  chipText: "#0A0E1A",
-}
-
-const lightPalette: Palette = {
-  bg: "#E1E2E7",
-  panel: "#E9E9EC",
-  panelAlt: "#DFE0E5",
-  border: "#A8AECB",
-  borderDim: "#C1C6DD",
-  accent: "#2E7DE9",
-  teal: "#118C74",
-  green: "#587539",
-  red: "#F52A65",
-  yellow: "#8C6C3E",
-  orange: "#B15C00",
-  magenta: "#7847BD",
-  cyan: "#007197",
-  text: "#343B58",
-  dim: "#6172B0",
-  faint: "#9DA3C2",
-  chipText: "#E1E2E7",
-}
-
-// When the terminal never answers the background query, paint no backgrounds
-// at all and stick to mid-brightness colors that read on dark and light.
-const neutralPalette: Palette = {
-  bg: "transparent",
-  panel: "transparent",
-  panelAlt: "transparent",
-  border: "#808080",
-  borderDim: "#6E6E6E",
-  accent: "#4F9CF9",
-  teal: "#27AE9D",
-  green: "#6FAE4F",
-  red: "#E0606C",
-  yellow: "#B59B3A",
-  orange: "#CE8633",
-  magenta: "#A985D6",
-  cyan: "#3FA7C4",
-  text: "#9E9E9E",
-  dim: "#7A7A7A",
-  faint: "#616161",
-  chipText: "#000000",
-}
-
-// Module-level on purpose: one TUI exists per archer process, and a mutable
-// palette spares threading it through every render helper below.
-let theme: Palette = darkPalette
-
-export function paletteForMode(mode: "dark" | "light" | null | undefined): Palette {
-  if (mode === "light") return lightPalette
-  if (mode === "dark") return darkPalette
-  return neutralPalette
-}
 
 const kindStyles: Record<ActivityKind, { icon: string; color: PaletteColor }> = {
   tool: { icon: "⚒", color: "cyan" },
@@ -144,7 +71,6 @@ function kindStyle(kind: ActivityKind): { icon: string; color: string } {
   return { icon: style.icon, color: theme[style.color] }
 }
 
-const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 const pipelineWidth = 32
 const feedLimit = 100
 
@@ -153,8 +79,6 @@ const permissionChoices: ReadonlyArray<{ reply: PermissionReply; label: string; 
   { reply: "always", label: "always allow", color: "accent" },
   { reply: "reject", label: "reject", color: "red" },
 ]
-
-type PhaseStatus = "pending" | "running" | "completed" | "skipped" | "failed"
 
 type UsageSessionState = {
   cost: number
@@ -212,7 +136,7 @@ export async function createTuiProgress(
     targetFps: 12,
   })
   const mode = await renderer.waitForThemeMode(1_000).catch(() => null)
-  theme = paletteForMode(mode)
+  setTheme(paletteForTerminal(mode, terminalBackgroundHex(renderer)))
   return new TuiProgress(renderer, phases, onAbort, autoAccept)
 }
 
@@ -246,7 +170,7 @@ export class TuiProgress implements ProgressUI {
   private suspendDepth = 0
   private readonly handleThemeMode = (mode: unknown) => {
     if (mode !== "dark" && mode !== "light") return
-    theme = paletteForMode(mode)
+    setTheme(paletteForTerminal(mode, terminalBackgroundHex(this.renderer)))
     this.applyPalette()
     this.addEvent("archer", "system", `terminal theme changed: ${mode}`)
     this.render()
@@ -316,7 +240,7 @@ export class TuiProgress implements ProgressUI {
       id: "archer-header",
       height: 4,
       borderColor: theme.border,
-      backgroundColor: theme.panel,
+      backgroundColor: theme.bg,
     })
 
     const body = new BoxRenderable(renderer, {
@@ -339,7 +263,7 @@ export class TuiProgress implements ProgressUI {
       width: pipelineWidth,
       height: "100%",
       borderColor: theme.borderDim,
-      backgroundColor: theme.panelAlt,
+      backgroundColor: theme.bg,
       title: " pipeline ",
       titleAlignment: "left",
       onMouseDown: openFromPipeline,
@@ -351,7 +275,7 @@ export class TuiProgress implements ProgressUI {
       height: "100%",
       flexGrow: 1,
       borderColor: theme.borderDim,
-      backgroundColor: theme.panelAlt,
+      backgroundColor: theme.bg,
       title: " activity ",
       titleAlignment: "left",
     })
@@ -366,7 +290,7 @@ export class TuiProgress implements ProgressUI {
       id: "archer-footer",
       height: 3,
       borderColor: theme.borderDim,
-      backgroundColor: theme.panel,
+      backgroundColor: theme.bg,
       onMouseDown: openFromFooter,
     })
     footer.text.onMouseDown = openFromFooter
@@ -378,10 +302,10 @@ export class TuiProgress implements ProgressUI {
 
     this.paletteTargets.push(
       { box: shell, background: "bg" },
-      { box: header.box, background: "panel", border: "border" },
-      { box: pipeline.box, background: "panelAlt", border: "borderDim" },
-      { box: feed.box, background: "panelAlt", border: "borderDim" },
-      { box: footer.box, background: "panel", border: "borderDim" },
+      { box: header.box, background: "bg", border: "border" },
+      { box: pipeline.box, background: "bg", border: "borderDim" },
+      { box: feed.box, background: "bg", border: "borderDim" },
+      { box: footer.box, background: "bg", border: "borderDim" },
     )
 
     body.add(pipeline.box)
@@ -408,7 +332,7 @@ export class TuiProgress implements ProgressUI {
       border: true,
       borderStyle: "rounded",
       borderColor: theme.yellow,
-      backgroundColor: theme.panel,
+      backgroundColor: theme.overlay,
       title: " ⚿ permission required ",
       titleAlignment: "left",
       width: 64,
@@ -420,7 +344,7 @@ export class TuiProgress implements ProgressUI {
     this.modal.add(this.modalText)
     this.overlay.add(this.modal)
     renderer.root.add(this.overlay)
-    this.paletteTargets.push({ box: this.modal, background: "panel", border: "yellow" })
+    this.paletteTargets.push({ box: this.modal, background: "overlay", border: "yellow" })
 
     renderer.keyInput.on("keypress", this.handleKeyPress)
     renderer.on("theme_mode", this.handleThemeMode)
@@ -1057,72 +981,6 @@ export class TuiProgress implements ProgressUI {
   }
 }
 
-function joinLines(lines: StyledText[]): StyledText {
-  const chunks: TextChunk[] = []
-  lines.forEach((line, index) => {
-    if (index > 0) chunks.push(raw("\n"))
-    chunks.push(...line.chunks)
-  })
-  return new StyledText(chunks)
-}
-
-function plain(text: string): StyledText {
-  return stringToStyledText(text)
-}
-
-function raw(text: string): TextChunk {
-  return stringToStyledText(text).chunks[0] ?? fg(theme.text)(text)
-}
-
-function padBetween(left: TextChunk[], right: TextChunk[], width: number): StyledText {
-  const gap = Math.max(1, width - chunksLength(left) - chunksLength(right))
-  if (right.length === 0) return new StyledText(left)
-  return new StyledText([...left, raw(" ".repeat(gap)), ...right])
-}
-
-function chunksLength(chunks: TextChunk[]) {
-  return chunks.reduce((sum, chunk) => sum + displayWidth(chunk.text), 0)
-}
-
-// East-Asian wide chars and emoji take two terminal cells; counting UTF-16
-// units would push the right-aligned columns out of the panel.
-function displayWidth(text: string) {
-  let width = 0
-  for (const char of text) {
-    width += isWideCodePoint(char.codePointAt(0)!) ? 2 : 1
-  }
-  return width
-}
-
-function isWideCodePoint(code: number) {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe4f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  )
-}
-
-function statusIcon(status: PhaseStatus, now: number): TextChunk {
-  switch (status) {
-    case "completed":
-      return fg(theme.green)("✓")
-    case "running":
-      return fg(theme.accent)(spinnerFrame(now))
-    case "failed":
-      return fg(theme.red)("✗")
-    case "skipped":
-      return fg(theme.faint)("⊘")
-    default:
-      return fg(theme.faint)("○")
-  }
-}
-
 function phaseMetaChunks(phase: PhaseState, now: number): TextChunk[] {
   if (phase.status === "pending") return []
   if (phase.status === "skipped" && phase.restoredDurationMs === undefined) return [fg(theme.faint)("skipped")]
@@ -1149,20 +1007,6 @@ function todoLine(todos: ProgressTodo[], width: number): StyledText {
   return new StyledText(chunks)
 }
 
-// Box-drawing strokes render single-width everywhere, unlike the geometric
-// shapes (▰▱) that draw unevenly in many terminal fonts.
-function progressBar(fraction: number, width: number, color: string): TextChunk[] {
-  const cells = Math.max(0, Math.min(1, fraction)) * width
-  const filled = Math.floor(cells)
-  const head = filled < width && cells - filled >= 0.5
-  const track = width - filled - (head ? 1 : 0)
-  const chunks: TextChunk[] = []
-  if (filled > 0) chunks.push(fg(color)("━".repeat(filled)))
-  if (head) chunks.push(fg(color)("╸"))
-  if (track > 0) chunks.push(fg(theme.faint)("─".repeat(track)))
-  return chunks
-}
-
 function runningFraction(phase: PhaseState) {
   if (phase.todos.length === 0) return 0.1
   const completed = phase.todos.filter((todo) => todo.status === "completed").length
@@ -1172,10 +1016,6 @@ function runningFraction(phase: PhaseState) {
 function permissionSummary(info: PermissionPromptInfo) {
   const detail = info.command || info.target || info.patterns.join(", ")
   return detail ? `${info.permission} · ${truncate(detail, 120)}` : info.permission
-}
-
-function spinnerFrame(now: number) {
-  return spinnerFrames[Math.floor(now / 100) % spinnerFrames.length]!
 }
 
 function emptyTokens(): ProgressTokens {
@@ -1213,53 +1053,4 @@ function isDuplicateStep(phase: PhaseState, stepID?: string) {
 
 function safeCost(cost: number | undefined) {
   return typeof cost === "number" && Number.isFinite(cost) ? cost : 0
-}
-
-function formatMoney(cost: number) {
-  return `$${cost.toFixed(cost >= 1 ? 2 : 4)}`
-}
-
-function formatCount(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
-  return String(value)
-}
-
-function formatElapsed(ms: number) {
-  const totalSeconds = Math.floor(ms / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`
-}
-
-function formatAgo(ms: number) {
-  const seconds = Math.floor(ms / 1000)
-  if (seconds <= 1) return "now"
-  if (seconds < 60) return `${seconds}s ago`
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s ago`
-}
-
-function formatTime(time: number) {
-  return new Date(time).toLocaleTimeString("en-GB", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
-}
-
-function shortID(value: string) {
-  if (value.length <= 12) return value
-  return `${value.slice(0, 7)}…${value.slice(-4)}`
-}
-
-function shortUrl(value: string) {
-  return value.replace(/^https?:\/\//, "")
-}
-
-function projectName(dir: string) {
-  if (!dir) return "…"
-  const parts = dir.split("/").filter(Boolean)
-  return parts[parts.length - 1] ?? dir
-}
-
-function truncate(value: string, max: number) {
-  const singleLine = value.replace(/\s+/g, " ").trim()
-  if (singleLine.length <= max) return singleLine
-  return `${singleLine.slice(0, Math.max(0, max - 1))}…`
 }
