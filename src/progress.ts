@@ -1,7 +1,7 @@
 import { log } from "./log"
-import type { Phase } from "./types"
+import type { Step } from "./types"
 
-export type ProgressPhase = Pick<Phase, "name" | "description">
+export type ProgressPhase = Pick<Step, "name" | "description">
 
 export type ProgressTokens = {
   input: number

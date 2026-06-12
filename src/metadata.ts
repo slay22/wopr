@@ -10,6 +10,7 @@ import type {
   ProgressUI,
   ProgressUsage,
 } from "./progress"
+import type { Pipeline } from "./types"
 import type { Workspace } from "./workspace"
 
 export type PhaseMetadataStatus = "pending" | "running" | "completed" | "skipped" | "failed"
@@ -26,15 +27,19 @@ export type PhaseMetadata = {
 }
 
 export type RunMetadata = {
-  schemaVersion: 1
+  schemaVersion: 2
   runID: string
   targetDir: string
   createdAt: number
   updatedAt: number
+  /** The resolved pipeline this run executes; resume replays it even if the project config changed since. */
+  pipeline?: Pipeline
   phases: Record<string, PhaseMetadata>
 }
 
 export type RunMetadataStore = {
+  /** The effective pipeline for this run: the frozen one on resume, the freshly resolved one otherwise. */
+  pipeline: Pipeline
   snapshot(name: string): ProgressPhaseSnapshot | undefined
   phaseStarted(name: string): void
   phaseSession(name: string, sessionID: string): void
@@ -46,9 +51,12 @@ export type RunMetadataStore = {
 
 const saveDebounceMs = 2_000
 
-export async function openRunMetadata(workspace: Workspace, targetDir: string): Promise<RunMetadataStore> {
+export async function openRunMetadata(workspace: Workspace, targetDir: string, pipeline: Pipeline): Promise<RunMetadataStore> {
   const path = join(workspace.dir, "metadata.json")
   const data = (await loadMetadata(path, workspace.runID)) ?? newMetadata(workspace.runID, targetDir)
+  // First open freezes the pipeline; pre-pipeline (v1) runs adopt the current
+  // one, whose default step names match what those runs executed.
+  const effectivePipeline = (data.pipeline ??= pipeline)
   // Usage events carry cumulative totals per opencode session; keeping the
   // accumulators out of the persisted shape avoids ever re-counting on resume.
   const usage = new Map<string, Map<string, UsageAccumulator>>()
@@ -103,6 +111,7 @@ export async function openRunMetadata(workspace: Workspace, targetDir: string): 
   void persist()
 
   return {
+    pipeline: effectivePipeline,
     snapshot(name) {
       const entry = data.phases[name]
       if (!entry) return undefined
@@ -251,12 +260,13 @@ export async function readRunMetadata(path: string): Promise<RunMetadata | undef
     return undefined
   }
   try {
-    const parsed = JSON.parse(body) as Partial<RunMetadata>
-    if (parsed.schemaVersion !== 1 || typeof parsed.phases !== "object" || !parsed.phases) {
+    const parsed = JSON.parse(body) as Partial<RunMetadata> & { schemaVersion?: number }
+    // v1 is v2 minus the frozen pipeline; openRunMetadata backfills it.
+    if (![1, 2].includes(parsed.schemaVersion ?? 0) || typeof parsed.phases !== "object" || !parsed.phases) {
       log.warn(`ignoring run metadata with unknown shape at ${path}`)
       return undefined
     }
-    return { ...parsed, schemaVersion: 1, phases: parsed.phases } as RunMetadata
+    return { ...parsed, schemaVersion: 2, phases: parsed.phases } as RunMetadata
   } catch {
     log.warn(`ignoring corrupt run metadata at ${path}`)
     return undefined
@@ -265,7 +275,7 @@ export async function readRunMetadata(path: string): Promise<RunMetadata | undef
 
 function newMetadata(runID: string, targetDir: string): RunMetadata {
   const now = Date.now()
-  return { schemaVersion: 1, runID, targetDir, createdAt: now, updatedAt: now, phases: {} }
+  return { schemaVersion: 2, runID, targetDir, createdAt: now, updatedAt: now, phases: {} }
 }
 
 function emptyTokens(): ProgressTokens {

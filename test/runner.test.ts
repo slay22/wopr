@@ -14,7 +14,7 @@ import {
   shouldRetryAttempt,
   shouldSkip,
 } from "../src/runner"
-import type { Phase } from "../src/types"
+import type { AgentStep } from "../src/types"
 import type { Workspace } from "../src/workspace"
 
 function messageUpdated(info: Record<string, unknown>) {
@@ -45,10 +45,10 @@ describe("runner helpers", () => {
   })
 
   test("applies only and skip phase filters", () => {
-    expect(shouldSkip("security", { onlyPhases: ["implementer"], skipPhases: [] })).toBe(true)
-    expect(shouldSkip("implementer", { onlyPhases: ["implementer"], skipPhases: ["implementer"] })).toBe(false)
-    expect(shouldSkip("design", { onlyPhases: [], skipPhases: ["design"] })).toBe(true)
-    expect(shouldSkip("tests", { onlyPhases: [], skipPhases: [] })).toBe(false)
+    expect(shouldSkip("security", { onlySteps: ["implementer"], skipSteps: [] })).toBe(true)
+    expect(shouldSkip("implementer", { onlySteps: ["implementer"], skipSteps: ["implementer"] })).toBe(false)
+    expect(shouldSkip("design", { onlySteps: [], skipSteps: ["design"] })).toBe(true)
+    expect(shouldSkip("tests", { onlySteps: [], skipSteps: [] })).toBe(false)
   })
 
   test("turns assistant message updates into live cumulative usage", () => {
@@ -99,7 +99,7 @@ describe("runner helpers", () => {
   })
 
   test("restores on resume only when the phase didn't fail", async () => {
-    const phase = { name: "design", reportPath: "reports/design.md" } as Phase
+    const phase = { name: "design", reportPath: "reports/design.md" } as AgentStep
 
     const workspaceWith = async (report: boolean) => {
       const dir = await mkdtemp(join(tmpdir(), "archer-resume-"))

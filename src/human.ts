@@ -20,22 +20,29 @@ export async function runHumanReviewGate(
   opencodeUrl: string,
   progress: ProgressUI = noopProgress,
   permissions?: PermissionGate,
+  stepName = "human-review",
 ) {
-  if (!options.humanReview) return
+  // Human steps are filtered out of new pipelines when --no-human-review is
+  // set; this guard covers resumed runs whose frozen pipeline still has one.
+  if (!options.humanReview) {
+    progress.phaseSkipped(stepName)
+    log.warn(`[${stepName}] skipped by --no-human-review`)
+    return
+  }
 
   if (!stdin.isTTY || !stdout.isTTY) {
-    progress.phaseSkipped("human-review")
-    log.warn("[human-review] skipped because stdin/stdout are not interactive")
+    progress.phaseSkipped(stepName)
+    log.warn(`[${stepName}] skipped because stdin/stdout are not interactive`)
     return
   }
 
-  if (options.resumeRunID && (await humanReviewApproved(workspace))) {
-    progress.phaseCompleted("human-review", "already approved in previous run")
-    log.info("[human-review] already approved in previous run; skipping on resume")
+  if (options.resumeRunID && (await humanReviewApproved(workspace, stepName))) {
+    progress.phaseCompleted(stepName, "already approved in previous run")
+    log.info(`[${stepName}] already approved in previous run; skipping on resume`)
     return
   }
 
-  progress.phaseStarted("human-review", "waiting for manual action")
+  progress.phaseStarted(stepName, "waiting for manual action")
 
   let iterations = 0
   let app: AppProcess | undefined
@@ -45,21 +52,21 @@ export async function runHumanReviewGate(
   // terminal to themselves.
   progress.suspend()
   try {
-    log.section("human-review - implementation checkpoint")
+    log.section(`${stepName} - manual review checkpoint`)
     log.info("choose an action now, or Archer will prepare the configured app command after 10 seconds")
     let action = await askHumanAction({ timeoutMs: 10_000, timeoutAction: "prepare" })
 
     for (;;) {
       if (action === "continue") {
         await commitHumanChanges(options)
-        await writeHumanReviewReport(workspace, options, "approved", iterations)
-        progress.phaseCompleted("human-review", "approved")
+        await writeHumanReviewReport(workspace, options, "approved", iterations, stepName)
+        progress.phaseCompleted(stepName, "approved")
         return
       }
 
       if (action === "prepare" || action === "rerun") {
         await stopApp(app)
-        app = await prepareApp(options, progress)
+        app = await prepareApp(options, progress, stepName)
         action = await askHumanAction()
         continue
       }
@@ -68,7 +75,7 @@ export async function runHumanReviewGate(
         iterations++
         await stopApp(app)
         app = undefined
-        progress.phaseRunning("human-review", "interactive OpenCode iteration")
+        progress.phaseRunning(stepName, "interactive OpenCode iteration")
         // The interactive OpenCode TUI answers its own permission prompts;
         // Archer's gate must not race it for the same requests.
         permissions?.pause()
@@ -82,8 +89,8 @@ export async function runHumanReviewGate(
         continue
       }
 
-      await writeHumanReviewReport(workspace, options, "aborted", iterations)
-      progress.phaseFailed("human-review", "aborted by user")
+      await writeHumanReviewReport(workspace, options, "aborted", iterations, stepName)
+      progress.phaseFailed(stepName, "aborted by user")
       throw new Error("aborted by human review")
     }
   } finally {
@@ -92,19 +99,19 @@ export async function runHumanReviewGate(
   }
 }
 
-async function humanReviewApproved(workspace: Workspace) {
+async function humanReviewApproved(workspace: Workspace, stepName: string) {
   try {
-    const report = await readFile(join(workspace.dir, "reports", "human-review.md"), "utf8")
+    const report = await readFile(join(workspace.dir, "reports", `${stepName}.md`), "utf8")
     return /^- Result: approved$/m.test(report)
   } catch {
     return false
   }
 }
 
-async function prepareApp(options: RunOptions, progress: ProgressUI): Promise<AppProcess | undefined> {
-  progress.phaseRunning("human-review", "preparing app")
+async function prepareApp(options: RunOptions, progress: ProgressUI, stepName: string): Promise<AppProcess | undefined> {
+  progress.phaseRunning(stepName, "preparing app")
   await launchEmulator(options)
-  progress.phaseRunning("human-review", "running app command")
+  progress.phaseRunning(stepName, "running app command")
   return startApp(options)
 }
 
@@ -221,8 +228,8 @@ async function commitHumanChanges(options: RunOptions) {
   if (committed) log.info("[human-review] committed manual changes")
 }
 
-async function writeHumanReviewReport(workspace: Workspace, options: RunOptions, result: "approved" | "aborted", iterations: number) {
-  const reportPath = join(workspace.dir, "reports", "human-review.md")
+async function writeHumanReviewReport(workspace: Workspace, options: RunOptions, result: "approved" | "aborted", iterations: number, stepName: string) {
+  const reportPath = join(workspace.dir, "reports", `${stepName}.md`)
   await mkdir(dirname(reportPath), { recursive: true })
   await writeFile(
     reportPath,

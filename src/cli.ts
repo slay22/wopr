@@ -1,18 +1,40 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-import { defaultGptModel, defaultGptVariant, phases } from "./phases"
-import { run } from "./runner"
+import { buildAgentRegistry, loadArcherConfig, selectPipelineSpec, type ArcherDefaults } from "./config"
+import { defaultGptModel, defaultGptVariant, defaultPipeline, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
+import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
-import type { RunOptions } from "./types"
+import type { Pipeline, RunOptions } from "./types"
 import { isValidRunID } from "./workspace"
 
-const phaseNames: string[] = phases.map((phase) => phase.name)
-
-type ParsedArgs = Omit<RunOptions, "prompt"> & {
+/**
+ * Flags as written: every scalar stays undefined until the user sets it, so
+ * resolveRunOptions can tell "flag given" from "flag at its default" and apply
+ * the precedence chain flag > .archer/config.yaml defaults > built-in default.
+ */
+export type ParsedArgs = {
   prompt?: string
   promptFile?: string
   help?: boolean
+  pipeline?: string
+  files: string[]
+  onlySteps: string[]
+  skipSteps: string[]
+  resumeRunID?: string
+  keepRunDir?: boolean
+  modelOverride?: string
+  tui?: boolean
+  humanReview?: boolean
+  emulatorID?: string
+  appRunCommand?: string
+  interactiveModel?: string
+  interactiveVariant?: string
+  maxAttempts?: number
+  baseRef?: string
+  targetDir: string
+  includeDirty?: boolean
+  yolo?: boolean
 }
 
 export type CliCommand =
@@ -28,18 +50,20 @@ export async function parseAndRun(argv: string[]) {
   }
   if (command.type === "runs") {
     const resolution = await browseRuns(command.runID)
-    if (resolution.type === "resume") await run(resumeOptions(resolution.runID, resolution.targetDir))
+    if (resolution.type === "resume") await run(await resumeOptions(resolution.runID, resolution.targetDir))
     return
   }
 
   await run(command.options)
 }
 
-// The browser resumes with default flags (the original run's flags aren't
-// recorded), but metadata recovers the repo the run was launched against.
-function resumeOptions(runID: string, targetDir?: string): RunOptions {
-  const { help: _help, prompt: _prompt, promptFile: _promptFile, ...defaults } = parseArgs([])
-  return { ...defaults, prompt: "", resumeRunID: runID, targetDir: targetDir ?? defaults.targetDir }
+// The browser resumes with default flags; metadata recovers both the repo the
+// run was launched against and the pipeline it was running.
+async function resumeOptions(runID: string, targetDir?: string): Promise<RunOptions> {
+  const parsed = parseArgs([])
+  parsed.resumeRunID = runID
+  if (targetDir) parsed.targetDir = targetDir
+  return { ...(await resolveRunOptions(parsed)), prompt: "" }
 }
 
 export async function parseCommand(argv: string[]): Promise<CliCommand> {
@@ -69,29 +93,81 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
     throw new Error("need a prompt (positional or --prompt-file) or --resume <id>")
   }
 
-  const { help: _help, prompt: _parsedPrompt, promptFile: _promptFile, ...options } = parsed
-  return { type: "run", options: { ...options, prompt } }
+  return { type: "run", options: { ...(await resolveRunOptions(parsed)), prompt } }
+}
+
+/** Applies the precedence chain and resolves the pipeline the run will execute. */
+export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOptions, "prompt">> {
+  const config = await loadArcherConfig(parsed.targetDir)
+  const defaults = config?.defaults ?? {}
+
+  const humanReview = parsed.humanReview ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
+
+  const agents = buildAgentRegistry(config)
+  const pipelineName = parsed.pipeline ?? defaults.pipeline ?? "default"
+  let pipeline: Pipeline
+  try {
+    pipeline = resolvePipeline({ name: pipelineName, spec: selectPipelineSpec(config, pipelineName), agents, defaultModel: defaults.model })
+  } catch (error) {
+    // A resumed run replays the pipeline frozen in its metadata; a config
+    // that has since broken must not block it. New runs surface the error.
+    if (!parsed.resumeRunID) throw error
+    pipeline = defaultPipeline()
+  }
+  // --no-human-review (and non-interactive defaults) drop manual gates from
+  // the run entirely, so they never show up as steps.
+  if (!humanReview) pipeline = { ...pipeline, steps: pipeline.steps.filter((step) => step.type !== "human") }
+
+  if (parsed.modelOverride) parseModel(splitModelVariant(parsed.modelOverride).model)
+  const interactive = resolveInteractiveModel(parsed, defaults)
+
+  const options: Omit<RunOptions, "prompt"> = {
+    files: [...(config?.attachments ?? []), ...parsed.files],
+    onlySteps: parsed.onlySteps,
+    skipSteps: parsed.skipSteps,
+    resumeRunID: parsed.resumeRunID ?? "",
+    keepRunDir: parsed.keepRunDir ?? false,
+    modelOverride: parsed.modelOverride ?? "",
+    tui: parsed.tui ?? Boolean(process.stdout.isTTY && process.stderr.isTTY),
+    humanReview,
+    emulatorID: parsed.emulatorID ?? defaults.emulator ?? "",
+    appRunCommand: parsed.appRunCommand ?? defaults.appRunCommand ?? "",
+    interactiveModel: interactive.model,
+    interactiveVariant: interactive.variant,
+    maxAttempts: parsed.maxAttempts ?? defaults.maxAttempts ?? 2,
+    baseRef: parsed.baseRef ?? defaults.baseRef ?? "main",
+    targetDir: parsed.targetDir,
+    includeDirty: parsed.includeDirty ?? false,
+    yolo: parsed.yolo ?? false,
+    pipeline,
+    agents,
+    permissions: config?.permissions ?? { allow: [], deny: [] },
+  }
+
+  // Fast feedback for typos; a resumed run validates again in the runner
+  // against the pipeline frozen in its metadata.
+  if (!options.resumeRunID) validateStepFilters(pipeline, options)
+
+  return options
+}
+
+// Model source: flag > config defaults.interactiveModel > built-in default.
+// The variant rides on whichever source won (or --interactive-variant).
+function resolveInteractiveModel(parsed: ParsedArgs, defaults: ArcherDefaults): { model: string; variant: string } {
+  const chosen = parsed.interactiveModel
+    ? splitModelVariant(parsed.interactiveModel)
+    : defaults.interactiveModel
+      ? splitModelVariant(defaults.interactiveModel)
+      : { model: defaultGptModel, variant: defaultGptVariant }
+  return { model: chosen.model, variant: parsed.interactiveVariant ?? chosen.variant ?? "" }
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     files: [],
-    onlyPhases: [],
-    skipPhases: [],
-    resumeRunID: "",
-    keepRunDir: false,
-    modelOverride: "",
-    tui: Boolean(process.stdout.isTTY && process.stderr.isTTY),
-    humanReview: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    emulatorID: "",
-    appRunCommand: "",
-    interactiveModel: defaultGptModel,
-    interactiveVariant: defaultGptVariant,
-    maxAttempts: 2,
-    baseRef: "main",
+    onlySteps: [],
+    skipSteps: [],
     targetDir: process.cwd(),
-    includeDirty: false,
-    yolo: false,
   }
   const positional: string[] = []
 
@@ -129,11 +205,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "-f":
         parsed.files.push(takeValue())
         break
+      case "--pipeline":
+      case "-p":
+        parsed.pipeline = takeValue()
+        break
       case "--only":
-        parsed.onlyPhases.push(...phaseListValue(takeValue(), "--only"))
+        parsed.onlySteps.push(...listValue(takeValue()))
         break
       case "--skip":
-        parsed.skipPhases.push(...phaseListValue(takeValue(), "--skip"))
+        parsed.skipSteps.push(...listValue(takeValue()))
         break
       case "--resume":
         parsed.resumeRunID = takeValue()
@@ -211,17 +291,6 @@ function listValue(value: string) {
     .filter(Boolean)
 }
 
-// A typo here is expensive: --only runs nothing, --skip runs the phase anyway.
-function phaseListValue(value: string, flag: string) {
-  const names = listValue(value)
-  for (const name of names) {
-    if (phaseNames.includes(name)) continue
-    if (name === "human-review") throw new Error(`${flag}: human-review is not a pipeline phase; use --no-human-review to disable the manual gate`)
-    throw new Error(`${flag}: unknown phase "${name}" (valid: ${phaseNames.join(", ")})`)
-  }
-  return names
-}
-
 function help() {
   return `archer [prompt]
 
@@ -230,6 +299,7 @@ Sequential OpenCode agent pipeline for implementing features.
 Usage:
   archer "Add onboarding"
   archer --prompt-file prd.md --file lib/onboarding --file test/onboarding_test.dart
+  archer --pipeline bug-fix --prompt-file bug.md
   archer runs [run-id]
 
 Commands:
@@ -238,25 +308,36 @@ Commands:
 
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
-  --file, -f <path>        Attach a file or directory to all phases (repeatable)
-  --only <phases>          Run only these phases (implementer,patterns,security,design,tests,adversarial)
-  --skip <phases>          Skip these phases
-  --resume <id>            Resume a previous run by its ID (phases with an existing report are skipped)
+  --file, -f <path>        Attach a file or directory to all steps (repeatable)
+  --pipeline, -p <name>    Pipeline to run; built-in "default" runs
+                           implementer,human-review,patterns,security,design,tests,adversarial
+  --only <steps>           Run only these pipeline steps
+  --skip <steps>           Skip these pipeline steps
+  --resume <id>            Resume a previous run by its ID (steps with an existing report are
+                           skipped; the run replays the pipeline it started with)
   --keep-run-dir           Don't delete the run dir when done
   --yolo                   Auto-allow ask-level permissions (hard denylist still applies; shift+tab toggles it live in the TUI)
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
-  --model <provider/model> Force a model for all phases
+  --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)
   --no-tui                 Disable visual phase progress
-  --human-review           Pause after implementer; prepare app command after 10s (default in interactive terminals)
-  --no-human-review        Disable the post-implementer manual gate
+  --human-review           Enable human-review steps (default in interactive terminals)
+  --no-human-review        Drop all human-review steps from the pipeline
   --emulator <id>          Optional Flutter emulator to launch during manual review
   --app-run-command <cmd>  Command used to run the app during manual review (default: disabled)
   --no-app-run             Don't launch the app automatically during manual review
-  --interactive-model <m>  Model used by manual OpenCode iterations (default: ${defaultGptModel})
-  --interactive-variant <v> Model variant for manual iterations (default: ${defaultGptVariant})
-  --max-attempts <n>       Attempts per phase before failing (default: 2)
+  --interactive-model <m>  Model used by manual OpenCode iterations (default: ${defaultGptModel}#${defaultGptVariant})
+  --interactive-variant <v> Model variant for manual iterations
+  --max-attempts <n>       Attempts per step before failing (default: 2)
   --base <ref>             Branch/base for calculating diffs (default: main)
   --dir <path>             Target repo (default: cwd)
+
+Project config (.archer/config.yaml):
+  defaults:                model, maxAttempts, baseRef, pipeline, appRunCommand, emulator, interactiveModel
+  agents:                  project agents (prompt at .archer/agents/<name>.md) or built-in overrides
+  pipelines:               named step lists mixing agents and human-review gates
+  permissions:             allow/deny additions to the bash policy (deny always wins)
+  attachments:             files attached to every step
+  CLI flags always win over config defaults.
 `
 }

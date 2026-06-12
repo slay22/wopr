@@ -3,63 +3,25 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import type { AgentConfig, Config } from "@opencode-ai/sdk/v2"
-import type { AgentName } from "./phases"
+import { builtInAgents } from "./pipeline"
+import type { AgentSpec, PermissionAdditions } from "./types"
 
 const sourceDir = dirname(fileURLToPath(import.meta.url))
 const builtInPromptsDir = join(sourceDir, "..", "prompts")
 const runtimeSafetyPrompt = "runtime-safety"
 
-export function opencodeConfig(runDir: string, targetDir = process.cwd()): Config {
-  const agent = {
-    implementer: agentConfig(
-      "Implements the feature described in the PRD respecting repo patterns",
-      undefined,
-      loadAgentPrompt("implementer", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-    "pattern-auditor": agentConfig(
-      "Audits patterns and best practices, applies refactoring without changing behavior",
-      undefined,
-      loadAgentPrompt("pattern-auditor", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-    "security-auditor": agentConfig(
-      "Audits the new implementation for security issues and fixes them",
-      undefined,
-      loadAgentPrompt("security-auditor", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-    "design-polisher": agentConfig(
-      "Polishes new UI following the repo's design system, without redesigning",
-      0.2,
-      loadAgentPrompt("design-polisher", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-    "test-engineer": agentConfig(
-      "Ensures automated tests and relevant E2E coverage",
-      undefined,
-      loadAgentPrompt("test-engineer", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-    "adversarial-reviewer": agentConfig(
-      "Final adversarial reviewer before PR creation",
-      0.1,
-      loadAgentPrompt("adversarial-reviewer", targetDir),
-      runDir,
-      targetDir,
-      false,
-    ),
-  } satisfies Record<AgentName, AgentConfig>
+const noAdditions: PermissionAdditions = { allow: [], deny: [] }
+
+export function opencodeConfig(
+  runDir: string,
+  targetDir = process.cwd(),
+  agents: readonly AgentSpec[] = builtInAgents,
+  permissions: PermissionAdditions = noAdditions,
+): Config {
+  const agent: Record<string, AgentConfig> = {}
+  for (const spec of agents) {
+    agent[spec.name] = agentConfig(spec.description, spec.temperature, loadAgentPrompt(spec.name, targetDir), runDir, targetDir, false, permissions)
+  }
 
   return {
     agent,
@@ -70,30 +32,33 @@ export function opencodeConfig(runDir: string, targetDir = process.cwd()): Confi
   }
 }
 
-export function loadAgentPrompt(agentName: AgentName, targetDir = process.cwd()) {
+export function loadAgentPrompt(agentName: string, targetDir = process.cwd()) {
   const agentPrompt = readProjectAgentPrompt(agentName, targetDir) ?? readBuiltInPrompt(agentName)
   const safetyPrompt = readBuiltInPrompt(runtimeSafetyPrompt)
   return [agentPrompt.trimEnd(), "", "---", "", safetyPrompt.trim()].join("\n")
 }
 
-export function projectAgentPromptPath(agentName: AgentName, targetDir: string) {
+export function projectAgentPromptPath(agentName: string, targetDir: string) {
   return join(targetDir, ".archer", "agents", `${agentName}.md`)
 }
 
-export function builtInPromptPath(promptName: AgentName | typeof runtimeSafetyPrompt) {
+export function builtInPromptPath(promptName: string) {
   return join(builtInPromptsDir, `${promptName}.md`)
 }
 
-function readProjectAgentPrompt(agentName: AgentName, targetDir: string) {
+function readProjectAgentPrompt(agentName: string, targetDir: string) {
   const path = projectAgentPromptPath(agentName, targetDir)
   if (!isFile(path)) return undefined
   return readFileSync(path, "utf8")
 }
 
-function readBuiltInPrompt(promptName: AgentName | typeof runtimeSafetyPrompt) {
+function readBuiltInPrompt(promptName: string) {
   const path = builtInPromptPath(promptName)
-  if (!isFile(path)) throw new Error(`missing built-in prompt: ${path}`)
-  return readFileSync(path, "utf8")
+  if (isFile(path)) return readFileSync(path, "utf8")
+  if (builtInAgents.some((agent) => agent.name === promptName) || promptName === runtimeSafetyPrompt) {
+    throw new Error(`missing built-in prompt: ${path}`)
+  }
+  throw new Error(`agent "${promptName}" has no prompt; create .archer/agents/${promptName}.md in the target repo`)
 }
 
 function isFile(path: string) {
@@ -126,6 +91,7 @@ function agentConfig(
   runDir: string,
   targetDir: string,
   webfetch: boolean,
+  permissions: PermissionAdditions,
 ): AgentConfig {
   return {
     description,
@@ -141,7 +107,7 @@ function agentConfig(
     permission: {
       edit: "allow",
       question: "deny",
-      bash: bashPolicy(targetDir),
+      bash: bashPolicy(targetDir, permissions),
       external_directory: {
         "*": "deny",
         [join(runDir, "**")]: "allow",
@@ -410,11 +376,13 @@ export function projectScriptAllowPatterns(targetDir = process.cwd()): string[] 
   return out
 }
 
-export function bashPolicy(targetDir = process.cwd()): Record<string, "allow" | "deny" | "ask"> {
+export function bashPolicy(targetDir = process.cwd(), additions: PermissionAdditions = noAdditions): Record<string, "allow" | "deny" | "ask"> {
   const policy: Record<string, "allow" | "deny" | "ask"> = {}
-  const denied = new Set(denyBashPatterns)
-  for (const pattern of denyBashPatterns) policy[pattern] = "deny"
-  for (const pattern of [...baseAllowBashPatterns, ...projectScriptAllowPatterns(targetDir)]) {
+  // Config additions only ever extend the lists: a project can deny more and
+  // allow more, but a config allow can never resurrect a denied pattern.
+  const denied = new Set([...denyBashPatterns, ...additions.deny])
+  for (const pattern of denied) policy[pattern] = "deny"
+  for (const pattern of [...baseAllowBashPatterns, ...projectScriptAllowPatterns(targetDir), ...additions.allow]) {
     if (denied.has(pattern)) continue
     policy[pattern] = "allow"
   }

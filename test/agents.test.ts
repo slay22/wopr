@@ -141,4 +141,43 @@ describe("opencode config", () => {
     // resolved by archer's gate, where only ask-level requests can auto-allow.
     expect(policy["*"]).toBe("ask")
   })
+
+  test("project permission additions extend the policy without weakening it", () => {
+    const policy = bashPolicy("/tmp/non-existent-archer-target", {
+      allow: ["supabase gen types*", "git push*"],
+      deny: ["stripe *"],
+    })
+
+    expect(policy["supabase gen types*"]).toBe("allow")
+    expect(policy["stripe *"]).toBe("deny")
+    // A config allow can never resurrect a denied pattern.
+    expect(policy["git push*"]).toBe("deny")
+    expect(policy["*"]).toBe("ask")
+  })
+
+  test("project agents need a prompt file", () => {
+    expect(() => loadAgentPrompt("ghost", "/tmp/non-existent-archer-target")).toThrow("create .archer/agents/ghost.md")
+  })
+
+  test("project agents land in the opencode config with their prompt and temperature", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "archer-custom-agent-"))
+    try {
+      await mkdir(join(dir, ".archer", "agents"), { recursive: true })
+      await writeFile(join(dir, ".archer", "agents", "api-reviewer.md"), "# API Reviewer\n\nReview the API surface.")
+
+      const config = opencodeConfig("/tmp/archer-run", dir, [
+        { name: "implementer", description: "Implements", builtIn: true },
+        { name: "api-reviewer", description: "Reviews APIs", temperature: 0.3, builtIn: false },
+      ])
+
+      const custom = config.agent?.["api-reviewer"]
+      expect(custom?.description).toBe("Reviews APIs")
+      expect(custom?.temperature).toBe(0.3)
+      expect(custom?.prompt).toContain("# API Reviewer")
+      expect(custom?.prompt).toContain("# Archer Runtime Safety")
+      expect(config.agent?.implementer?.temperature).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

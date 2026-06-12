@@ -11,7 +11,7 @@ import { log } from "./log"
 import { openRunMetadata, recordProgress, type RunMetadataStore } from "./metadata"
 import { startOpencode } from "./opencode"
 import { startPermissionGate, type PermissionGate } from "./permissions"
-import { phases } from "./phases"
+import { splitModelVariant, validateStepFilters } from "./pipeline"
 import {
   createProgressUI,
   noopProgress,
@@ -27,7 +27,7 @@ import {
   type RunOutcome,
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
-import type { Phase, RunOptions } from "./types"
+import type { AgentSpec, AgentStep, Pipeline, RunOptions } from "./types"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 
 type ActiveSession = {
@@ -156,9 +156,14 @@ export async function run(options: RunOptions) {
   const autoAccept: AutoAccept = { enabled: options.yolo }
 
   try {
-    metadata = await openRunMetadata(workspace, options.targetDir)
+    metadata = await openRunMetadata(workspace, options.targetDir, options.pipeline)
+    // Resumed runs replay the pipeline frozen in their metadata, so the steps
+    // (and thus --only/--skip names and required agents) come from there.
+    const pipeline = metadata.pipeline
+    validateStepFilters(pipeline, options)
+    ensureAgentsAvailable(pipeline, options.agents)
     progress = recordProgress(
-      await createProgressUI(progressPhases(options), options.tui, () => shutdown.request("Ctrl+C"), autoAccept),
+      await createProgressUI(progressPhases(pipeline), options.tui, () => shutdown.request("Ctrl+C"), autoAccept),
       metadata,
     )
     progress.start(workspace.runID, options.targetDir)
@@ -180,7 +185,7 @@ export async function run(options: RunOptions) {
     const abortBoot = () => boot.abort(shutdown.signal.reason)
     shutdown.signal.addEventListener("abort", abortBoot, { once: true })
     try {
-      opencode = await startOpencode(opencodeConfig(workspace.dir, options.targetDir), boot.signal)
+      opencode = await startOpencode(opencodeConfig(workspace.dir, options.targetDir, options.agents, options.permissions), boot.signal)
     } finally {
       shutdown.signal.removeEventListener("abort", abortBoot)
     }
@@ -196,23 +201,25 @@ export async function run(options: RunOptions) {
     })
 
     const resuming = Boolean(options.resumeRunID)
-    for (const phase of phases) {
+    for (const step of pipeline.steps) {
       shutdown.throwIfRequested()
-      if (shouldSkip(phase.name, options)) {
-        progress.phaseSkipped(phase.name)
-        if (phase.name === "implementer" && options.humanReview) progress.phaseSkipped("human-review")
-        log.warn(`[${phase.name}] skipped by flag`)
+      if (shouldSkip(step.name, options)) {
+        progress.phaseSkipped(step.name)
+        log.warn(`[${step.name}] skipped by flag`)
         continue
       }
-      const restored = resuming && (await restorePhaseFromPreviousRun(workspace, metadata, phase, progress))
-      if (!restored) {
-        await runPhase(opencode.client, workspace, phase, options, extraFiles, projectContextFiles, progress, shutdown)
+      if (step.type === "human") {
+        await runHumanReviewGate(workspace, options, opencode.url, progress, permissions, step.name)
+        continue
       }
-      if (phase.name === "implementer") await runHumanReviewGate(workspace, options, opencode.url, progress, permissions)
+      const restored = resuming && (await restorePhaseFromPreviousRun(workspace, metadata, step, progress))
+      if (!restored) {
+        await runPhase(opencode.client, workspace, step, options, extraFiles, projectContextFiles, progress, shutdown)
+      }
     }
 
     progress.message("writing run summary")
-    await writeSummary(workspace, summaryReportNames(options.humanReview))
+    await writeSummary(workspace, pipeline.steps.map((step) => step.name))
     await holdFinishScreen(progress, shutdown, { status: "completed", runDir: workspace.dir })
   } catch (error) {
     runErr = error
@@ -261,7 +268,7 @@ async function holdFinishScreen(progress: ProgressUI, shutdown: RunShutdown, out
 export async function restorePhaseFromPreviousRun(
   workspace: Workspace,
   metadata: RunMetadataStore,
-  phase: Phase,
+  phase: AgentStep,
   progress: ProgressUI,
 ): Promise<boolean> {
   const reportAbs = join(workspace.dir, phase.reportPath)
@@ -283,7 +290,7 @@ export async function restorePhaseFromPreviousRun(
 async function runPhase(
   client: OpencodeClient,
   workspace: Workspace,
-  phase: Phase,
+  phase: AgentStep,
   options: RunOptions,
   extraFiles: FilePartInput[],
   projectContextFiles: string[],
@@ -318,7 +325,7 @@ type ModelSelection = { providerID: string; modelID: string; variant?: string }
 
 async function preparePhaseRun(
   workspace: Workspace,
-  phase: Phase,
+  phase: AgentStep,
   options: RunOptions,
   extraFiles: FilePartInput[],
   projectContextFiles: string[],
@@ -336,7 +343,7 @@ async function preparePhaseRun(
   const attachments = [...contextFiles, ...phaseFiles, ...extraFiles]
   const prompt = buildPhasePrompt(workspace, phase)
   const model = selectedModel(phase, options.modelOverride)
-  const maxAttempts = Math.max(1, options.maxAttempts)
+  const maxAttempts = Math.max(1, phase.maxAttempts ?? options.maxAttempts)
 
   return { attachments, prompt, model, maxAttempts }
 }
@@ -353,7 +360,7 @@ async function projectContextFileParts(paths: string[], targetDir: string) {
 async function runPhaseWithRetries(
   client: OpencodeClient,
   workspace: Workspace,
-  phase: Phase,
+  phase: AgentStep,
   targetDir: string,
   prepared: PreparedPhaseRun,
   baseline: RepoSnapshot | undefined,
@@ -397,7 +404,7 @@ async function runPhaseWithRetries(
 async function runPhaseAttempt(
   client: OpencodeClient,
   workspace: Workspace,
-  phase: Phase,
+  phase: AgentStep,
   targetDir: string,
   prepared: PreparedPhaseRun,
   attempt: number,
@@ -433,7 +440,7 @@ async function runPhaseAttempt(
   return assistantText
 }
 
-async function persistPhaseReport(workspace: Workspace, phase: Phase, assistantText: string) {
+async function persistPhaseReport(workspace: Workspace, phase: AgentStep, assistantText: string) {
   const reportAbs = join(workspace.dir, phase.reportPath)
   if (!(await exists(reportAbs)) && assistantText.trim() !== "") {
     await mkdir(dirname(reportAbs), { recursive: true })
@@ -447,7 +454,7 @@ async function persistPhaseReport(workspace: Workspace, phase: Phase, assistantT
   return reportAbs
 }
 
-async function commitPhase(phase: Phase, reportAbs: string, targetDir: string) {
+async function commitPhase(phase: AgentStep, reportAbs: string, targetDir: string) {
   const message = `archer(${phase.name}): ${await summaryFromReport(reportAbs)}`
   const committed = await addAllAndCommit(message, targetDir)
   if (!committed) {
@@ -457,7 +464,7 @@ async function commitPhase(phase: Phase, reportAbs: string, targetDir: string) {
   }
 }
 
-async function restorePhaseBaseline(phase: Phase, baseline: RepoSnapshot | undefined, targetDir: string, originalError: unknown) {
+async function restorePhaseBaseline(phase: AgentStep, baseline: RepoSnapshot | undefined, targetDir: string, originalError: unknown) {
   if (!baseline) return
   try {
     await restoreRepoSnapshot(baseline, targetDir)
@@ -473,7 +480,7 @@ async function restorePhaseBaseline(phase: Phase, baseline: RepoSnapshot | undef
 async function promptPhase(
   client: OpencodeClient,
   input: {
-    phase: Phase
+    phase: AgentStep
     workspace: Workspace
     targetDir: string
     prompt: string
@@ -1143,7 +1150,7 @@ function truncate(value: string, max: number) {
   return `${singleLine.slice(0, Math.max(0, max - 3))}...`
 }
 
-function buildPhasePrompt(workspace: Workspace, phase: Phase) {
+function buildPhasePrompt(workspace: Workspace, phase: AgentStep) {
   return [
     `# Pipeline phase: ${phase.name}`,
     "",
@@ -1178,10 +1185,13 @@ export function parseModel(value: string) {
   return { providerID, modelID }
 }
 
-function selectedModel(phase: Phase, override: string): ModelSelection {
-  const model = parseModel(override || phase.model)
-  if (override || !phase.variant) return model
-  return { ...model, variant: phase.variant }
+function selectedModel(phase: AgentStep, override: string): ModelSelection {
+  if (override) {
+    const { model, variant } = splitModelVariant(override)
+    return { ...parseModel(model), ...(variant ? { variant } : {}) }
+  }
+  const model = parseModel(phase.model)
+  return phase.variant ? { ...model, variant: phase.variant } : model
 }
 
 function formatModel(model: ModelSelection) {
@@ -1189,23 +1199,24 @@ function formatModel(model: ModelSelection) {
   return model.variant ? `${base}#${model.variant}` : base
 }
 
-export function shouldSkip(name: string, options: Pick<RunOptions, "onlyPhases" | "skipPhases">) {
-  if (options.onlyPhases.length > 0) return !options.onlyPhases.includes(name)
-  return options.skipPhases.includes(name)
+export function shouldSkip(name: string, options: Pick<RunOptions, "onlySteps" | "skipSteps">) {
+  if (options.onlySteps.length > 0) return !options.onlySteps.includes(name)
+  return options.skipSteps.includes(name)
 }
 
-function summaryReportNames(includeHumanReview: boolean) {
-  return phases.flatMap((phase) => (phase.name === "implementer" && includeHumanReview ? [phase.name, "human-review"] : [phase.name]))
+// A resumed run can outlive its config: the frozen pipeline may reference a
+// project agent that has since been renamed or removed. Fail before any
+// session starts instead of mid-pipeline.
+function ensureAgentsAvailable(pipeline: Pipeline, agents: readonly AgentSpec[]) {
+  const available = new Set(agents.map((agent) => agent.name))
+  for (const step of pipeline.steps) {
+    if (step.type !== "agent" || available.has(step.agentName)) continue
+    throw new Error(`pipeline "${pipeline.name}" needs agent "${step.agentName}", which is not defined (removed from .archer/config.yaml?)`)
+  }
 }
 
-function progressPhases(options: RunOptions): ProgressPhase[] {
-  return phases.flatMap((phase) => {
-    const progressPhase: ProgressPhase = { name: phase.name, description: phase.description }
-    if (phase.name === "implementer" && options.humanReview) {
-      return [progressPhase, { name: "human-review", description: "Manual implementation checkpoint" }]
-    }
-    return [progressPhase]
-  })
+function progressPhases(pipeline: Pipeline): ProgressPhase[] {
+  return pipeline.steps.map((step) => ({ name: step.name, description: step.description }))
 }
 
 class LoggedAttemptError extends Error {}
@@ -1234,7 +1245,7 @@ async function summaryFromReport(path: string) {
   return "no summary"
 }
 
-async function writeAttemptLog(workspace: Workspace, phase: Phase, attempt: number, payload: unknown) {
+async function writeAttemptLog(workspace: Workspace, phase: AgentStep, attempt: number, payload: unknown) {
   await writeFile(join(workspace.dir, "logs", `${phase.name}.${attempt}.json`), JSON.stringify(payload, null, 2))
 }
 

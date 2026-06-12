@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+import { afterAll, describe, expect, test } from "bun:test"
 
 import { parseArgs, parseCommand } from "../src/cli"
+import { stepNames } from "../src/pipeline"
 
 describe("cli parsing", () => {
   test("parses pipeline flags without side effects", () => {
@@ -15,8 +20,8 @@ describe("cli parsing", () => {
       "onboarding",
     ])
 
-    expect(parsed.onlyPhases).toEqual(["implementer", "tests"])
-    expect(parsed.skipPhases).toEqual(["design"])
+    expect(parsed.onlySteps).toEqual(["implementer", "tests"])
+    expect(parsed.skipSteps).toEqual(["design"])
     expect(parsed.files).toEqual(["lib/onboarding"])
     expect(parsed.includeDirty).toBe(true)
     expect(parsed.prompt).toBe("add onboarding")
@@ -41,10 +46,14 @@ describe("cli parsing", () => {
     expect(() => parseArgs(["--max-attempts", "0", "prompt"])).toThrow("--max-attempts")
   })
 
-  test("rejects unknown phase names", () => {
-    expect(() => parseArgs(["--only", "secuirty", "prompt"])).toThrow('unknown phase "secuirty"')
-    expect(() => parseArgs(["--skip", "desing", "prompt"])).toThrow('unknown phase "desing"')
-    expect(() => parseArgs(["--skip", "human-review", "prompt"])).toThrow("--no-human-review")
+  test("rejects unknown step names against the resolved pipeline", async () => {
+    await expect(parseCommand(["--only", "secuirty", "prompt"])).rejects.toThrow('unknown step "secuirty"')
+    await expect(parseCommand(["--skip", "desing", "prompt"])).rejects.toThrow('unknown step "desing"')
+
+    // human-review is a real step now; referencing it stays valid even when
+    // the gate was dropped from the pipeline (non-interactive runs).
+    const command = await parseCommand(["--skip", "human-review", "prompt"])
+    expect(command.type).toBe("run")
   })
 
   test("rejects a flag where a value is expected", () => {
@@ -79,16 +88,21 @@ describe("cli parsing", () => {
     expect(parsed.interactiveVariant).toBe("xhigh")
   })
 
-  test("does not configure a Flutter app command by default", () => {
-    const parsed = parseArgs(["prompt"])
+  test("does not configure a Flutter app command by default", async () => {
+    const command = await parseCommand(["prompt"])
 
-    expect(parsed.appRunCommand).toBe("")
-    expect(parsed.emulatorID).toBe("")
+    expect(command.type).toBe("run")
+    if (command.type !== "run") return
+    expect(command.options.appRunCommand).toBe("")
+    expect(command.options.emulatorID).toBe("")
   })
 
-  test("yolo is opt-in", () => {
-    expect(parseArgs(["prompt"]).yolo).toBe(false)
-    expect(parseArgs(["--yolo", "prompt"]).yolo).toBe(true)
+  test("yolo is opt-in", async () => {
+    const plain = await parseCommand(["prompt"])
+    if (plain.type === "run") expect(plain.options.yolo).toBe(false)
+
+    const yolo = await parseCommand(["--yolo", "prompt"])
+    if (yolo.type === "run") expect(yolo.options.yolo).toBe(true)
   })
 
   test("parses the runs subcommand", async () => {
@@ -104,5 +118,82 @@ describe("cli parsing", () => {
   test("rejects bad runs subcommand arguments", async () => {
     await expect(parseCommand(["runs", "latest"])).rejects.toThrow("invalid run id")
     await expect(parseCommand(["runs", "20260519-103045-x7q2", "extra"])).rejects.toThrow("usage: archer runs")
+  })
+})
+
+describe("config precedence", () => {
+  const dirs: string[] = []
+
+  afterAll(async () => {
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  async function projectWithConfig() {
+    const dir = await mkdtemp(join(tmpdir(), "archer-cli-config-"))
+    dirs.push(dir)
+    await mkdir(join(dir, ".archer"), { recursive: true })
+    await writeFile(join(dir, "docs.md"), "# notes")
+    await writeFile(
+      join(dir, ".archer", "config.yaml"),
+      [
+        "defaults:",
+        "  maxAttempts: 5",
+        "  baseRef: develop",
+        "  pipeline: quick",
+        "  appRunCommand: flutter run",
+        "pipelines:",
+        "  quick:",
+        "    steps:",
+        "      - implementer",
+        "      - tests",
+        "attachments:",
+        "  - docs.md",
+      ].join("\n"),
+    )
+    return dir
+  }
+
+  test("config defaults apply when flags are absent", async () => {
+    const dir = await projectWithConfig()
+    const command = await parseCommand(["--dir", dir, "prompt"])
+
+    expect(command.type).toBe("run")
+    if (command.type !== "run") return
+    expect(command.options.maxAttempts).toBe(5)
+    expect(command.options.baseRef).toBe("develop")
+    expect(command.options.appRunCommand).toBe("flutter run")
+    expect(command.options.pipeline.name).toBe("quick")
+    expect(stepNames(command.options.pipeline)).toEqual(["implementer", "tests"])
+    expect(command.options.files).toEqual(["docs.md"])
+  })
+
+  test("CLI flags always win over config defaults", async () => {
+    const dir = await projectWithConfig()
+    const command = await parseCommand([
+      "--dir",
+      dir,
+      "--max-attempts",
+      "1",
+      "--base",
+      "main",
+      "--pipeline",
+      "default",
+      "--no-app-run",
+      "prompt",
+    ])
+
+    expect(command.type).toBe("run")
+    if (command.type !== "run") return
+    expect(command.options.maxAttempts).toBe(1)
+    expect(command.options.baseRef).toBe("main")
+    expect(command.options.appRunCommand).toBe("")
+    expect(command.options.pipeline.name).toBe("default")
+  })
+
+  test("an unknown pipeline lists what exists", async () => {
+    const dir = await projectWithConfig()
+    await expect(parseCommand(["--dir", dir, "--pipeline", "ghost", "prompt"])).rejects.toThrow(
+      'unknown pipeline "ghost" (available: default, quick)',
+    )
   })
 })
