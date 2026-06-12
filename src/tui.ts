@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+
 import {
   BoxRenderable,
   StyledText,
@@ -29,9 +32,11 @@ import {
   shortUrl,
   spinnerFrame,
   statusIcon,
+  styleSummaryLine,
   terminalBackgroundHex,
   theme,
   truncate,
+  wrapLines,
 } from "./tui-theme"
 
 import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
@@ -50,6 +55,7 @@ import type {
   ProgressTokens,
   ProgressUI,
   ProgressUsage,
+  RunOutcome,
 } from "./progress"
 
 const kindStyles: Record<ActivityKind, { icon: string; color: PaletteColor }> = {
@@ -126,6 +132,15 @@ type PendingPermission = {
   resolve: (reply: PermissionReply) => void
 }
 
+// The post-run screen: the dashboard stays up, phases become a browsable list,
+// and the logs panel turns into the selected phase's report viewer.
+type FinishState = RunOutcome & {
+  at: number
+  selected: number
+  reportScroll: number
+  resolve: () => void
+}
+
 export async function createTuiProgress(
   phases: readonly ProgressPhase[],
   onAbort?: () => void,
@@ -161,6 +176,7 @@ export class TuiProgress implements ProgressUI {
   private readonly stepText: TextRenderable
   private readonly todosBox: BoxRenderable
   private readonly todosText: TextRenderable
+  private readonly feedBox: BoxRenderable
   private readonly feedText: TextRenderable
   private readonly footerText: TextRenderable
   // Rebuilt on every pipeline render: panel row index → phase name, so clicks
@@ -176,6 +192,16 @@ export class TuiProgress implements ProgressUI {
   // Suspension nests: outer scopes (human-review gate) and inner prompts may
   // both suspend; only the outermost transition touches the renderer.
   private suspendDepth = 0
+  private finished?: FinishState
+  // A subshell (lazygit / git log) owns the terminal while the renderer is
+  // suspended; every key must reach it untouched.
+  private inSubshell = false
+  // Phase reports read lazily from the run dir once the finish screen is up.
+  private readonly reports = new Map<string, string[] | "loading" | "missing">()
+  // Visible rows of the report panel, captured at render time for paging keys.
+  private reportPageRows = 10
+  // Scroll indicator for the footer ("" while everything fits), set at render time.
+  private reportPosition = ""
   private readonly handleThemeMode = (mode: unknown) => {
     if (mode !== "dark" && mode !== "light") return
     setTheme(paletteForTerminal(mode, terminalBackgroundHex(this.renderer)))
@@ -185,12 +211,29 @@ export class TuiProgress implements ProgressUI {
   }
 
   private readonly handleKeyPress = (key: KeyEvent) => {
+    if (this.inSubshell) return
     if ((key.ctrl && key.name === "c") || key.raw === "\u0003") {
       key.preventDefault()
       key.stopPropagation()
+      // After the run ended Ctrl+C just dismisses the finish screen; aborting
+      // a finished run would only race the cleanup it already triggers.
+      if (this.finished) {
+        this.finished.resolve()
+        return
+      }
       this.addEvent("archer", "system", "ctrl+c received; shutting down")
       this.render()
       this.onAbort?.()
+      return
+    }
+    if (this.finished) {
+      // A permission can still arrive while the finish screen is up (e.g. the
+      // user iterates in a session opened with [o]); the modal keeps priority.
+      if (this.permissionQueue.length > 0) {
+        this.handlePermissionKey(key)
+        return
+      }
+      this.handleFinishedKey(key)
       return
     }
     // Checked before the permission modal so the toggle also resolves an
@@ -275,7 +318,10 @@ export class TuiProgress implements ProgressUI {
       event.preventDefault()
       event.stopPropagation()
       const name = this.pipelineRowPhases[event.y - this.pipelineText.y]
-      if (name) this.openSessionWindowForPhase(name, "click")
+      if (!name) return
+      // On the finish screen a click browses; opening stays on [o].
+      if (this.finished) this.selectFinishedPhase(name)
+      else this.openSessionWindowForPhase(name, "click")
     }
 
     const pipeline = this.panel({
@@ -363,6 +409,7 @@ export class TuiProgress implements ProgressUI {
     this.stepText = step.text
     this.todosBox = todos.box
     this.todosText = todos.text
+    this.feedBox = feed.box
     this.feedText = feed.text
     this.footerText = footer.text
 
@@ -597,6 +644,123 @@ export class TuiProgress implements ProgressUI {
     })
   }
 
+  // Resolves when the user dismisses the screen (q/esc/ctrl+c). Until then the
+  // run stays alive upstream: the opencode server keeps serving [o] and the
+  // run dir keeps the reports readable.
+  runFinished(outcome: RunOutcome): Promise<void> {
+    if (this.renderer.isDestroyed) return Promise.resolve()
+    return new Promise((resolve) => {
+      const failed = this.phases.findIndex((phase) => phase.status === "failed")
+      this.finished = {
+        ...outcome,
+        at: Date.now(),
+        selected: failed >= 0 ? failed : 0,
+        reportScroll: 0,
+        resolve,
+      }
+      for (const pending of this.permissionQueue.splice(0)) pending.resolve("reject")
+      this.addEvent(
+        "archer",
+        outcome.status === "completed" ? "system" : "error",
+        outcome.status === "completed" ? "run completed" : `run failed: ${outcome.error ?? "unknown error"}`,
+      )
+      this.render()
+    })
+  }
+
+  private handleFinishedKey(key: KeyEvent) {
+    const finished = this.finished
+    if (!finished) return
+    key.preventDefault()
+    key.stopPropagation()
+    switch (key.name) {
+      case "down":
+      case "j":
+        this.moveFinishedSelection(1)
+        break
+      case "up":
+      case "k":
+        this.moveFinishedSelection(-1)
+        break
+      case "o":
+        this.openSessionWindowForPhase(this.phases[finished.selected]!.name, "key")
+        break
+      case "g":
+        void this.openGitSubshell()
+        break
+      case "pagedown":
+      case "space":
+        finished.reportScroll += this.reportPageRows
+        break
+      case "pageup":
+        finished.reportScroll = Math.max(0, finished.reportScroll - this.reportPageRows)
+        break
+      case "q":
+      case "escape":
+        finished.resolve()
+        return
+    }
+    this.render()
+  }
+
+  private moveFinishedSelection(delta: number) {
+    const finished = this.finished
+    if (!finished || this.phases.length === 0) return
+    finished.selected = Math.max(0, Math.min(this.phases.length - 1, finished.selected + delta))
+    finished.reportScroll = 0
+  }
+
+  private selectFinishedPhase(name: string) {
+    const finished = this.finished
+    if (!finished) return
+    const index = this.phases.findIndex((phase) => phase.name === name)
+    if (index === -1) return
+    finished.selected = index
+    finished.reportScroll = 0
+    this.render()
+  }
+
+  // Lazygit (or plain `git log` when it isn't installed) takes over the whole
+  // terminal as a subshell; the dashboard suspends and repaints afterwards.
+  private async openGitSubshell() {
+    if (this.inSubshell || this.renderer.isDestroyed) return
+    const lazygit = Bun.which("lazygit")
+    const argv = lazygit ? [lazygit] : ["git", "log", "--graph", "--decorate", "--stat"]
+    const label = lazygit ? "lazygit" : "git log"
+    if (!lazygit) this.addEvent("archer", "system", "lazygit not installed; falling back to git log")
+    this.inSubshell = true
+    this.suspend()
+    try {
+      const proc = Bun.spawn(argv, {
+        cwd: this.targetDir || process.cwd(),
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+        env: process.env,
+      })
+      const code = await proc.exited
+      if (code !== 0) this.addEvent("archer", "error", `${label} exited with code ${code}`)
+    } catch (error) {
+      this.addEvent("archer", "error", `couldn't launch ${label}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      this.inSubshell = false
+      this.resume()
+    }
+  }
+
+  private loadReport(name: string, runDir: string) {
+    this.reports.set(name, "loading")
+    readFile(join(runDir, "reports", `${name}.md`), "utf8")
+      .then((body) => {
+        this.reports.set(name, body.replace(/\r\n/g, "\n").split("\n"))
+        this.render()
+      })
+      .catch(() => {
+        this.reports.set(name, "missing")
+        this.render()
+      })
+  }
+
   message(message: string) {
     this.addEvent("archer", "system", message)
     this.render()
@@ -623,6 +787,9 @@ export class TuiProgress implements ProgressUI {
     log.mute(false)
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.off("theme_mode", this.handleThemeMode)
+    // A shutdown signal can tear the run down while the finish screen is still
+    // up; resolving here keeps that promise from leaking.
+    this.finished?.resolve()
     for (const pending of this.permissionQueue.splice(0)) pending.resolve("reject")
     if (this.renderer.isDestroyed) return
     this.renderer.destroy()
@@ -715,7 +882,9 @@ export class TuiProgress implements ProgressUI {
   }
 
   private openActiveSessionWindow(source: "click" | "key") {
-    const active = this.findPhase(this.activePhase) ?? this.phases.find((phase) => phase.status === "running")
+    const active = this.finished
+      ? this.phases[this.finished.selected]
+      : (this.findPhase(this.activePhase) ?? this.phases.find((phase) => phase.status === "running"))
     if (!active) {
       this.addEvent("archer", "system", "no active opencode session to open yet")
       this.render()
@@ -813,34 +982,48 @@ export class TuiProgress implements ProgressUI {
   private render() {
     if (this.renderer.isDestroyed) return
     const now = Date.now()
-    const active = this.findPhase(this.activePhase) ?? this.phases.find((phase) => phase.status === "running")
+    // While running, the right column follows the live phase; on the finish
+    // screen it follows the browsed selection instead.
+    const focus = this.finished
+      ? this.phases[this.finished.selected]
+      : (this.findPhase(this.activePhase) ?? this.phases.find((phase) => phase.status === "running"))
     const innerWidth = Math.max(40, this.renderer.width - 6)
     const rightWidth = Math.max(40, this.renderer.width - pipelineWidth - 9)
 
     // Body rows left after the dir line (1), header (3), and footer (3); the
     // step and todos panels grow with their content but never starve the logs.
     const bodyHeight = Math.max(8, this.renderer.height - 7)
-    const stepLines = this.stepContent(active, now, rightWidth)
+    const stepLines = this.finished ? this.finishedPhaseContent(focus, now, rightWidth) : this.stepContent(focus, now, rightWidth)
+    this.stepBox.title = this.finished ? " phase " : " current step "
     this.stepBox.height = stepLines.length + 2
 
     const todoRows =
-      active && active.todos.length > 0
-        ? todoLines(active.todos, Math.max(3, Math.floor(bodyHeight * 0.6) - stepLines.length - 4), rightWidth)
+      focus && focus.todos.length > 0
+        ? todoLines(focus.todos, Math.max(3, Math.floor(bodyHeight * 0.6) - stepLines.length - 4), rightWidth)
         : []
     this.todosBox.visible = todoRows.length > 0
-    if (active && todoRows.length > 0) {
-      const completed = active.todos.filter((todo) => todo.status === "completed").length
+    if (focus && todoRows.length > 0) {
+      const completed = focus.todos.filter((todo) => todo.status === "completed").length
       this.todosBox.height = todoRows.length + 2
-      this.todosBox.title = ` todos ${completed}/${active.todos.length} `
+      this.todosBox.title = ` todos ${completed}/${focus.todos.length} `
       this.todosText.content = joinLines(todoRows)
     }
     const todosHeight = this.todosBox.visible ? todoRows.length + 2 : 0
 
+    const feedRows = Math.max(3, bodyHeight - stepLines.length - todosHeight - 4)
     this.dirText.content = this.dirContent(innerWidth)
     this.headerText.content = this.headerContent(now, innerWidth)
     this.pipelineText.content = this.pipelineContent(now)
     this.stepText.content = joinLines(stepLines)
-    this.feedText.content = joinLines(this.feedLines(rightWidth, Math.max(3, bodyHeight - stepLines.length - todosHeight - 4)))
+    if (this.finished) {
+      this.reportPageRows = feedRows
+      // Content first: it computes the scroll indicator the title shows.
+      this.feedText.content = joinLines(this.reportPanelLines(focus, rightWidth, feedRows))
+      this.feedBox.title = ` report · ${focus?.name ?? "—"}${this.reportPosition ? ` · ${this.reportPosition}` : ""} `
+    } else {
+      this.feedBox.title = " logs "
+      this.feedText.content = joinLines(this.feedLines(rightWidth, feedRows))
+    }
     this.footerText.content = this.footerContent(now, innerWidth)
     this.renderPermissionModal()
     this.renderer.requestRender()
@@ -850,16 +1033,25 @@ export class TuiProgress implements ProgressUI {
   // cost, and tokens. Phase status lives in the pipeline panel.
   private headerContent(now: number, width: number) {
     const usage = totalUsage(this.phases)
+    // The clock and elapsed time freeze at the moment the run ended.
+    const endAt = this.finished?.at ?? now
     const totals: TextChunk[] = [
-      fg(theme.dim)(formatTime(now)),
+      fg(theme.dim)(formatTime(endAt)),
       fg(theme.faint)("  ·  "),
-      fg(theme.text)(formatElapsed(now - this.startedAt)),
+      fg(theme.text)(formatElapsed(endAt - this.startedAt)),
       fg(theme.faint)("  ·  "),
       fg(theme.green)(formatMoney(usage.cost)),
       fg(theme.faint)("  ·  "),
       fg(theme.dim)(`↑${formatCount(usage.tokens.input)} ↓${formatCount(usage.tokens.output)} tokens`),
     ]
-    return padBetween([bold(fg(theme.accent)("◆ archer"))], totals, width)
+    const title: TextChunk[] = [bold(fg(theme.accent)("◆ archer"))]
+    if (this.finished) {
+      title.push(
+        fg(theme.faint)("  ·  "),
+        this.finished.status === "completed" ? bold(fg(theme.green)("✓ run completed")) : bold(fg(theme.red)("✗ run failed")),
+      )
+    }
+    return padBetween(title, totals, width)
   }
 
   // The working directory renders above the header box, outside its border.
@@ -895,16 +1087,20 @@ export class TuiProgress implements ProgressUI {
       plain(""),
     ]
     const rows: (string | undefined)[] = [undefined, undefined]
-    for (const phase of this.phases) {
+    for (const [index, phase] of this.phases.entries()) {
+      const selected = this.finished?.selected === index
       const name =
-        phase.status === "pending"
-          ? fg(theme.dim)(phase.name)
-          : phase.status === "skipped"
-            ? fg(theme.faint)(phase.name)
-            : phase.status === "running"
-              ? bold(fg(theme.text)(phase.name))
+        selected || phase.status === "running"
+          ? bold(fg(theme.text)(phase.name))
+          : phase.status === "pending"
+            ? fg(theme.dim)(phase.name)
+            : phase.status === "skipped"
+              ? fg(theme.faint)(phase.name)
               : fg(theme.text)(phase.name)
       const left: TextChunk[] = [statusIcon(phase.status, now), raw(" "), name]
+      // The selection marker only exists on the finish screen, where the
+      // pipeline doubles as the phase browser.
+      if (this.finished) left.unshift(selected ? fg(theme.accent)("▸ ") : raw("  "))
       rows.push(phase.name)
       out.push(padBetween(left, phaseMetaChunks(phase, now), width))
     }
@@ -973,6 +1169,80 @@ export class TuiProgress implements ProgressUI {
     return out
   }
 
+  // The phase panel on the finish screen: outcome, duration, model, session,
+  // usage, and diff of the browsed phase (there is no live activity anymore).
+  private finishedPhaseContent(phase: PhaseState | undefined, now: number, width: number): StyledText[] {
+    if (!phase) return [t`${fg(theme.dim)("no phases to show")}`]
+    const out: StyledText[] = []
+
+    const head: TextChunk[] = [statusIcon(phase.status, now), raw(" "), bold(fg(theme.text)(phase.name))]
+    if (phase.description) {
+      head.push(fg(theme.faint)("  ·  "), fg(theme.dim)(truncate(phase.description, Math.max(10, width - phase.name.length - 8))))
+    }
+    out.push(new StyledText(head))
+
+    const meta: TextChunk[] = []
+    const elapsed = phase.restoredDurationMs ?? (phase.startedAt !== undefined ? (phase.endedAt ?? now) - phase.startedAt : undefined)
+    if (elapsed !== undefined) meta.push(fg(theme.faint)("took "), fg(theme.dim)(formatElapsed(elapsed)))
+    const model = phase.lastStepModel || phase.model
+    if (model) {
+      if (meta.length > 0) meta.push(fg(theme.faint)(" · "))
+      meta.push(fg(theme.faint)("model "), fg(theme.dim)(truncate(model, 30)))
+    }
+    if (phase.attempt > 1) {
+      if (meta.length > 0) meta.push(fg(theme.faint)(" · "))
+      meta.push(fg(theme.faint)("attempts "), fg(theme.yellow)(`${phase.attempt}/${phase.maxAttempts}`))
+    }
+    if (phase.sessionID) {
+      if (meta.length > 0) meta.push(fg(theme.faint)(" · "))
+      meta.push(fg(theme.faint)(shortID(phase.sessionID)))
+    }
+    if (meta.length > 0) out.push(new StyledText(meta))
+
+    out.push(
+      new StyledText([
+        fg(theme.faint)("cost "),
+        fg(theme.dim)(phase.usageReported ? formatMoney(phase.cost) : "—"),
+        fg(theme.faint)(" · tokens "),
+        fg(theme.dim)(phase.usageReported ? `↑${formatCount(phase.tokens.input)} ↓${formatCount(phase.tokens.output)}` : "—"),
+        fg(theme.faint)(" · steps "),
+        fg(theme.dim)(String(phase.stepCount)),
+      ]),
+    )
+
+    if (phase.diff && phase.diff.files > 0) {
+      out.push(
+        t`${fg(theme.dim)("changes ")}${fg(theme.text)(`${phase.diff.files} files`)} ${fg(theme.green)(`+${phase.diff.additions}`)} ${fg(theme.red)(`−${phase.diff.deletions}`)}`,
+      )
+    }
+    if (this.finished?.error && phase.status === "failed") {
+      out.push(t`${fg(theme.red)(truncate(this.finished.error, Math.max(20, width)))}`)
+    }
+    return out
+  }
+
+  private reportPanelLines(phase: PhaseState | undefined, width: number, visible: number): StyledText[] {
+    const finished = this.finished
+    this.reportPosition = ""
+    if (!finished || !phase) return [t`${fg(theme.dim)("nothing to show")}`]
+
+    const report = this.reports.get(phase.name)
+    if (!report) {
+      this.loadReport(phase.name, finished.runDir)
+      return [t`${fg(theme.dim)("loading report…")}`]
+    }
+    if (report === "loading") return [t`${fg(theme.dim)("loading report…")}`]
+    if (report === "missing") return [t`${fg(theme.dim)("no report for this phase")}`]
+
+    const wrapped = wrapLines(report, Math.max(20, width))
+    const maxScroll = Math.max(0, wrapped.length - visible)
+    finished.reportScroll = Math.max(0, Math.min(finished.reportScroll, maxScroll))
+    if (maxScroll > 0) {
+      this.reportPosition = `${Math.round(((finished.reportScroll + visible) / wrapped.length) * 100)}%`
+    }
+    return wrapped.slice(finished.reportScroll, finished.reportScroll + visible).map(styleSummaryLine)
+  }
+
   private feedLines(width: number, visible: number): StyledText[] {
     const events = this.feed.slice(-visible).reverse()
     if (events.length === 0) return [t`${fg(theme.dim)("no activity yet…")}`]
@@ -996,6 +1266,24 @@ export class TuiProgress implements ProgressUI {
   }
 
   private footerContent(now: number, width: number) {
+    if (this.finished) {
+      const left: TextChunk[] = [
+        fg(theme.dim)("["),
+        fg(theme.accent)("j/k"),
+        fg(theme.dim)("] phases · ["),
+        fg(theme.accent)("o"),
+        fg(theme.dim)("] session · ["),
+        fg(theme.accent)("g"),
+        fg(theme.dim)("] lazygit · ["),
+        fg(theme.accent)("pgdn"),
+        fg(theme.dim)("] scroll · ["),
+        fg(theme.accent)("q"),
+        fg(theme.dim)("] close"),
+      ]
+      const right: TextChunk[] = [fg(theme.faint)(this.runID ? `run ${this.runID}` : "run …")]
+      return padBetween(left, right, width)
+    }
+
     if (this.permissionQueue.length > 0) {
       const left: TextChunk[] = [
         fg(theme.yellow)("⚿ "),

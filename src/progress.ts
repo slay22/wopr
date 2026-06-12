@@ -83,6 +83,13 @@ export type PermissionPromptInfo = {
   sessionID?: string
 }
 
+export type RunOutcome = {
+  status: "completed" | "failed"
+  error?: string
+  /** Run workspace dir; still alive while the finish screen is up (cleanup happens after). */
+  runDir: string
+}
+
 export type ProgressUI = {
   start(runID: string, targetDir: string): void
   serverReady(url: string): void
@@ -104,6 +111,8 @@ export type ProgressUI = {
   phaseRestored(name: string, snapshot: ProgressPhaseSnapshot): void
   /** When present, the UI resolves permission prompts itself (no terminal fallback). */
   askPermission?(info: PermissionPromptInfo): Promise<PermissionReply>
+  /** Holds the dashboard open on a finish screen (phase browser) and resolves when the user dismisses it. */
+  runFinished?(outcome: RunOutcome): Promise<void>
   message(message: string): void
   suspend(): void
   resume(): void

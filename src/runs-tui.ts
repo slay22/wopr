@@ -13,9 +13,11 @@ import {
   raw,
   setTheme,
   statusIcon,
+  styleSummaryLine,
   terminalBackgroundHex,
   theme,
   truncate,
+  wrapLines,
 } from "./tui-theme"
 import { runsRoot } from "./workspace"
 
@@ -562,27 +564,6 @@ class RunsBrowser {
     this.modal.height = visible + 4
     this.modalText.content = joinLines(lines)
   }
-}
-
-// Markdown stays unrendered on purpose; headings get the accent so long
-// summaries are scannable without pulling in a parser.
-function styleSummaryLine(line: string): StyledText {
-  if (/^#{1,6}\s/.test(line)) return t`${bold(fg(theme.accent)(line))}`
-  if (/^(```|---+$)/.test(line.trim())) return t`${fg(theme.faint)(line)}`
-  if (/^\s*([-*+]|\d+\.)\s/.test(line)) return new StyledText([fg(theme.teal)(line.match(/^\s*/)![0] + "• "), raw(line.replace(/^\s*([-*+]|\d+\.)\s/, ""))])
-  return plain(line)
-}
-
-function wrapLines(lines: string[], width: number): string[] {
-  const wrapped: string[] = []
-  for (const line of lines) {
-    if (line.length <= width) {
-      wrapped.push(line)
-      continue
-    }
-    for (let i = 0; i < line.length; i += width) wrapped.push(line.slice(i, i + width))
-  }
-  return wrapped
 }
 
 // The run ID's timestamp is authoritative; createdAt only covers runs whose

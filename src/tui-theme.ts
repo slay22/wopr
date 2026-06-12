@@ -1,4 +1,4 @@
-import { StyledText, fg, stringToStyledText } from "@opentui/core"
+import { StyledText, bold, fg, stringToStyledText, t } from "@opentui/core"
 
 import type { CliRenderer, TextChunk } from "@opentui/core"
 
@@ -298,4 +298,25 @@ export function truncate(value: string, max: number) {
   const singleLine = value.replace(/\s+/g, " ").trim()
   if (singleLine.length <= max) return singleLine
   return `${singleLine.slice(0, Math.max(0, max - 1))}…`
+}
+
+// Markdown stays unrendered on purpose; headings get the accent so long
+// summaries are scannable without pulling in a parser.
+export function styleSummaryLine(line: string): StyledText {
+  if (/^#{1,6}\s/.test(line)) return t`${bold(fg(theme.accent)(line))}`
+  if (/^(```|---+$)/.test(line.trim())) return t`${fg(theme.faint)(line)}`
+  if (/^\s*([-*+]|\d+\.)\s/.test(line)) return new StyledText([fg(theme.teal)(line.match(/^\s*/)![0] + "• "), raw(line.replace(/^\s*([-*+]|\d+\.)\s/, ""))])
+  return plain(line)
+}
+
+export function wrapLines(lines: string[], width: number): string[] {
+  const wrapped: string[] = []
+  for (const line of lines) {
+    if (line.length <= width) {
+      wrapped.push(line)
+      continue
+    }
+    for (let i = 0; i < line.length; i += width) wrapped.push(line.slice(i, i + width))
+  }
+  return wrapped
 }

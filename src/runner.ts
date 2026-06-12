@@ -24,6 +24,7 @@ import {
   type ProgressTokens,
   type ProgressUI,
   type ProgressUsage,
+  type RunOutcome,
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { Phase, RunOptions } from "./types"
@@ -212,8 +213,12 @@ export async function run(options: RunOptions) {
 
     progress.message("writing run summary")
     await writeSummary(workspace, summaryReportNames(options.humanReview))
+    await holdFinishScreen(progress, shutdown, { status: "completed", runDir: workspace.dir })
   } catch (error) {
     runErr = error
+    if (!isUserAbortError(error)) {
+      await holdFinishScreen(progress, shutdown, { status: "failed", error: formatSdkError(error), runDir: workspace.dir })
+    }
     throw error
   } finally {
     removeSignalHandlers()
@@ -234,6 +239,18 @@ export async function run(options: RunOptions) {
     // must not get a chance to surface mid-cleanup.
     opencode?.close()
   }
+}
+
+// The finish screen holds the run open while the opencode server and the run
+// dir are still alive, so [o] can attach to phase sessions and reports stay
+// readable. A signal (SIGTERM, a second Ctrl+C) must still tear the run down
+// without user input, hence the race against the shutdown signal.
+async function holdFinishScreen(progress: ProgressUI, shutdown: RunShutdown, outcome: RunOutcome) {
+  if (!progress.runFinished || shutdown.aborted) return
+  await Promise.race([
+    progress.runFinished(outcome),
+    new Promise<void>((resolve) => shutdown.signal.addEventListener("abort", () => resolve(), { once: true })),
+  ])
 }
 
 // A failed phase can still leave a report behind (the agent writes it
