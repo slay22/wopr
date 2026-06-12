@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import type { AssistantMessage, FilePartInput, OpencodeClient, Part } from "@opencode-ai/sdk/v2"
@@ -203,12 +203,8 @@ export async function run(options: RunOptions) {
         log.warn(`[${phase.name}] skipped by flag`)
         continue
       }
-      if (resuming && (await exists(join(workspace.dir, phase.reportPath)))) {
-        const snapshot = metadata.snapshot(phase.name)
-        if (snapshot) progress.phaseRestored(phase.name, snapshot)
-        else progress.phaseCompleted(phase.name, "already completed in previous run")
-        log.info(`[${phase.name}] report exists; skipping on resume`)
-      } else {
+      const restored = resuming && (await restorePhaseFromPreviousRun(workspace, metadata, phase, progress))
+      if (!restored) {
         await runPhase(opencode.client, workspace, phase, options, extraFiles, projectContextFiles, progress, shutdown)
       }
       if (phase.name === "implementer") await runHumanReviewGate(workspace, options, opencode.url, progress, permissions)
@@ -238,6 +234,33 @@ export async function run(options: RunOptions) {
     // must not get a chance to surface mid-cleanup.
     opencode?.close()
   }
+}
+
+// A failed phase can still leave a report behind (the agent writes it
+// mid-session before the commit step or a later attempt blows up), so the
+// report's existence alone can't prove the phase finished: a phase the
+// metadata marks as failed must retry, and its stale report must go first or
+// persistPhaseReport would keep it on the rerun.
+export async function restorePhaseFromPreviousRun(
+  workspace: Workspace,
+  metadata: RunMetadataStore,
+  phase: Phase,
+  progress: ProgressUI,
+): Promise<boolean> {
+  const reportAbs = join(workspace.dir, phase.reportPath)
+  if (!(await exists(reportAbs))) return false
+
+  const snapshot = metadata.snapshot(phase.name)
+  if (snapshot?.status === "failed") {
+    await rm(reportAbs, { force: true })
+    log.info(`[${phase.name}] failed in the previous run; retrying`)
+    return false
+  }
+
+  if (snapshot) progress.phaseRestored(phase.name, snapshot)
+  else progress.phaseCompleted(phase.name, "already completed in previous run")
+  log.info(`[${phase.name}] report exists; skipping on resume`)
+  return true
 }
 
 async function runPhase(

@@ -63,13 +63,26 @@ export async function ensureRepoReady(cwd: string, options: { includeDirty?: boo
   const status = await execFile("git", ["status", "--porcelain"], { cwd })
   if (status.stdout.trim() !== "") {
     if (!options.includeDirty) {
-      throw new Error("working tree is not clean; do commit/stash or use --include-dirty to include those changes")
+      // On resume the target dir comes from the run's metadata, not the user's
+      // cwd — name the repo and the files or the error is impossible to act on.
+      throw new Error(
+        `working tree at ${cwd} is not clean; do commit/stash or use --include-dirty to include those changes\n${dirtyFilesPreview(status.stdout)}`,
+      )
     }
     if ((options.maxAttempts ?? 1) > 1) {
       throw new Error("--include-dirty can't be combined with --max-attempts > 1; use --max-attempts 1")
     }
     log.warn("working tree is not clean; --include-dirty will include those changes in the first commit of the pipeline")
   }
+}
+
+const maxDirtyPreview = 5
+
+function dirtyFilesPreview(porcelain: string) {
+  const lines = porcelain.split("\n").filter(Boolean)
+  const shown = lines.slice(0, maxDirtyPreview).map((line) => `  ${line}`)
+  if (lines.length > shown.length) shown.push(`  … and ${lines.length - shown.length} more`)
+  return shown.join("\n")
 }
 
 export async function createCleanRepoSnapshot(cwd: string): Promise<RepoSnapshot | undefined> {

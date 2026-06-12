@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
-import { UserAbortError, describeSessionActivity, newActivityState, parseModel, shouldRetryAttempt, shouldSkip } from "../src/runner"
+import type { RunMetadataStore } from "../src/metadata"
+import { noopProgress, type ProgressPhaseSnapshot } from "../src/progress"
+import {
+  UserAbortError,
+  describeSessionActivity,
+  newActivityState,
+  parseModel,
+  restorePhaseFromPreviousRun,
+  shouldRetryAttempt,
+  shouldSkip,
+} from "../src/runner"
+import type { Phase } from "../src/types"
+import type { Workspace } from "../src/workspace"
 
 function messageUpdated(info: Record<string, unknown>) {
   return { type: "message.updated", properties: { sessionID: "ses_1", info } }
@@ -81,6 +96,52 @@ describe("runner helpers", () => {
     const tool = describeSessionActivity({ type: "session.next.tool.called", properties: { sessionID: "ses_1", tool: "bash" } }, state)
     expect(tool).toMatchObject({ type: "activity", message: "bash" })
     expect((tool as { pulse?: boolean }).pulse).toBeUndefined()
+  })
+
+  test("restores on resume only when the phase didn't fail", async () => {
+    const phase = { name: "design", reportPath: "reports/design.md" } as Phase
+
+    const workspaceWith = async (report: boolean) => {
+      const dir = await mkdtemp(join(tmpdir(), "archer-resume-"))
+      if (report) {
+        await mkdir(join(dir, "reports"), { recursive: true })
+        await writeFile(join(dir, "reports", "design.md"), "# stale report")
+      }
+      return { dir, runID: "20260101-000000-test" } as Workspace
+    }
+    const metadataWith = (snapshot?: ProgressPhaseSnapshot) => ({ snapshot: () => snapshot }) as unknown as RunMetadataStore
+    const progressSpy = () => {
+      const calls: string[] = []
+      return {
+        calls,
+        progress: {
+          ...noopProgress,
+          phaseRestored: () => void calls.push("restored"),
+          phaseCompleted: () => void calls.push("completed"),
+        },
+      }
+    }
+
+    // No report: nothing to restore.
+    const bare = await workspaceWith(false)
+    expect(await restorePhaseFromPreviousRun(bare, metadataWith({ status: "completed" }), phase, noopProgress)).toBe(false)
+
+    // Failed phase: retry, and the stale report must be gone.
+    const failed = await workspaceWith(true)
+    expect(await restorePhaseFromPreviousRun(failed, metadataWith({ status: "failed" }), phase, noopProgress)).toBe(false)
+    expect(await Bun.file(join(failed.dir, "reports", "design.md")).exists()).toBe(false)
+
+    // Completed phase: restored with its snapshot.
+    const completed = await workspaceWith(true)
+    const restoredSpy = progressSpy()
+    expect(await restorePhaseFromPreviousRun(completed, metadataWith({ status: "completed" }), phase, restoredSpy.progress)).toBe(true)
+    expect(restoredSpy.calls).toEqual(["restored"])
+
+    // Pre-metadata run: the report alone still counts as completed.
+    const legacy = await workspaceWith(true)
+    const legacySpy = progressSpy()
+    expect(await restorePhaseFromPreviousRun(legacy, metadataWith(undefined), phase, legacySpy.progress)).toBe(true)
+    expect(legacySpy.calls).toEqual(["completed"])
   })
 
   test("does not retry after user abort", () => {
