@@ -5,6 +5,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 
 import { log } from "./log"
 import { noopProgress, type AutoAccept, type PermissionPromptInfo, type PermissionReply, type ProgressUI } from "./progress"
+import { judgeCommand } from "./safety-judge"
 
 type PermissionRequest = {
   id: string
@@ -32,6 +33,8 @@ export type StartGateOptions = {
   directory: string
   /** When enabled, ask-level requests are auto-allowed ("once") instead of prompting. */
   autoAccept?: AutoAccept
+  /** Model used by the smart auto-accept judge; required for "smart" mode to do anything. */
+  judgeModel?: { providerID: string; modelID: string }
 }
 
 export function startPermissionGate(options: StartGateOptions): PermissionGate {
@@ -56,7 +59,9 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
           const request = payload.properties
           if (handled.has(request.id)) continue
           handled.add(request.id)
-          queue(() => handleRequest(options.client, request, options.interactive, progress, options.directory, options.autoAccept))
+          queue(() =>
+            handleRequest(options.client, request, options.interactive, progress, options.directory, options.autoAccept, options.judgeModel, controller.signal),
+          )
         }
       } catch (error) {
         if (controller.signal.aborted) return
@@ -103,17 +108,37 @@ async function handleRequest(
   progress: ProgressUI,
   directory: string,
   autoAccept?: AutoAccept,
+  judgeModel?: { providerID: string; modelID: string },
+  signal?: AbortSignal,
 ) {
   const summary = describeRequest(request)
   // Read at handling time, not subscription time: the TUI flips this live.
   // Opencode's denylist already rejected anything hard-denied, so whatever
   // reaches here is exactly the "ask" bucket auto-accept is meant to cover.
-  if (autoAccept?.enabled) {
+  if (autoAccept?.mode === "all") {
     log.info(`[permission] auto-allowed (auto-accept on): ${summary}`)
     progress.message(`auto-allowed: ${summary}`)
     await reply(client, request.id, directory, "once")
     return
   }
+
+  // Smart mode delegates the call to an AI judge running outside the agentic
+  // loop. A "safe" verdict auto-allows; anything else (incl. judge failure,
+  // which is fail-closed) drops through to the normal human prompt below.
+  let judgeReason: string | undefined
+  if (autoAccept?.mode === "smart" && judgeModel) {
+    progress.message(`evaluating safety: ${summary}`)
+    const verdict = await judgeCommand(client, { request: promptInfo(request), model: judgeModel, directory, signal })
+    if (verdict.safe) {
+      log.info(`[permission] smart-allowed: ${summary} — ${verdict.reason}`)
+      progress.message(`smart-allowed: ${summary} — ${verdict.reason}`)
+      await reply(client, request.id, directory, "once")
+      return
+    }
+    log.info(`[permission] smart auto-accept escalating to user: ${summary} — ${verdict.reason}`)
+    judgeReason = `flagged by safety judge: ${verdict.reason}`
+  }
+
   if (!interactive) {
     log.warn(`[permission] auto-rejecting ${request.permission} (no TTY): ${summary}`)
     await reply(client, request.id, directory, "reject", "Archer rejected: non-interactive run")
@@ -124,7 +149,7 @@ async function handleRequest(
   // plain-logs fallback so the run never drops to a bare black screen.
   const ask = progress.askPermission?.bind(progress)
   if (ask) {
-    const answer = await ask(promptInfo(request))
+    const answer = await ask(promptInfo(request, judgeReason))
     log.info(`[permission] replied ${answer} for ${request.permission}`)
     await reply(client, request.id, directory, answer, answer === "reject" ? "rejected by user" : undefined)
     return
@@ -133,7 +158,7 @@ async function handleRequest(
   progress.suspend()
   try {
     log.section("permission request")
-    stdout.write(formatRequest(request))
+    stdout.write(formatRequest(request, judgeReason))
     const answer = await askReply()
     log.info(`[permission] replied ${answer} for ${request.permission}`)
     await reply(client, request.id, directory, answer, answer === "reject" ? "rejected by user" : undefined)
@@ -142,7 +167,7 @@ async function handleRequest(
   }
 }
 
-function promptInfo(request: PermissionRequest): PermissionPromptInfo {
+function promptInfo(request: PermissionRequest, judgeReason?: string): PermissionPromptInfo {
   return {
     id: request.id,
     permission: request.permission,
@@ -151,6 +176,7 @@ function promptInfo(request: PermissionRequest): PermissionPromptInfo {
     target: pickString(request.metadata, ["path", "file", "url"]) || undefined,
     description: pickString(request.metadata, ["description"]) || undefined,
     sessionID: request.sessionID,
+    ...(judgeReason ? { judgeReason } : {}),
   }
 }
 
@@ -168,8 +194,9 @@ function describeRequest(request: PermissionRequest) {
   return request.permission
 }
 
-function formatRequest(request: PermissionRequest) {
+function formatRequest(request: PermissionRequest, judgeReason?: string) {
   const lines: string[] = [""]
+  if (judgeReason) lines.push(`⚠ ${judgeReason}`)
   lines.push(`category: ${request.permission}`)
   if (request.tool) lines.push(`tool call: ${request.tool.callID}`)
   lines.push(`session: ${request.sessionID}`)

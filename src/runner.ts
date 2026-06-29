@@ -30,6 +30,7 @@ import {
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { AgentSpec, AgentStep, Pipeline, RunOptions } from "./types"
+import { addTokens, emptyTokens, tokensFromValue } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 
 type ActiveSession = {
@@ -48,6 +49,21 @@ export class UserAbortError extends Error {
 
 export function isUserAbortError(error: unknown): error is UserAbortError {
   return error instanceof UserAbortError || (error instanceof Error && error.name === "UserAbortError")
+}
+
+/**
+ * Whether an unhandled rejection is the known-benign abort that the opencode SDK
+ * leaks when its SSE reader is cancelled (the reader rejects without being
+ * awaited). Only these are safe to swallow at the process level; anything else is
+ * a real fault and must stay visible. See main.ts's unhandledRejection handler.
+ */
+export function isIgnorableRejection(reason: unknown): boolean {
+  if (isUserAbortError(reason)) return true
+  if (reason instanceof Error) {
+    if (reason.name === "AbortError") return true
+    return /\baborted?\b/i.test(reason.message)
+  }
+  return false
 }
 
 export function shouldRetryAttempt(error: unknown, signal: AbortSignal, attempt: number, maxAttempts: number) {
@@ -160,7 +176,10 @@ export async function run(options: RunOptions) {
   const shutdown = new RunShutdown()
   const removeSignalHandlers = installShutdownSignals(shutdown)
 
-  const autoAccept: AutoAccept = { enabled: options.yolo }
+  const autoAccept: AutoAccept = { mode: options.yolo ? "all" : options.smart ? "smart" : "off" }
+  // cli.ts always resolves a concrete model string (--smart-model → config →
+  // --model → defaults.model), so smart mode never lacks a judge.
+  const judgeModel = parseModel(splitModelVariant(options.smartJudgeModel).model)
 
   try {
     metadata = await openRunMetadata(workspace, options.targetDir, options.pipeline)
@@ -182,6 +201,9 @@ export async function run(options: RunOptions) {
     if (options.yolo) {
       progress.message("YOLO enabled: ask-level permissions will be auto-allowed (denylist still applies); shift+tab toggles")
       log.warn("YOLO enabled: unknown non-denied commands will be auto-allowed")
+    } else if (options.smart) {
+      progress.message(`smart auto-accept enabled: ${formatModel(judgeModel)} judges each request; risky ones still prompt (shift+tab toggles)`)
+      log.warn(`smart auto-accept enabled: ${formatModel(judgeModel)} will auto-allow requests it judges safe`)
     }
 
     const extraFiles = await fileParts(options.files, options.targetDir, "error")
@@ -209,6 +231,7 @@ export async function run(options: RunOptions) {
       interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
       directory: options.targetDir,
       autoAccept,
+      judgeModel,
     })
 
     const resuming = Boolean(options.resumeRunID)
@@ -1134,15 +1157,10 @@ function messageUsageSignal(properties: Record<string, unknown>, state: Activity
   state.messageUsage.set(message.id, { cost, tokens })
 
   let totalCost = 0
-  const total: ProgressTokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  let total = emptyTokens()
   for (const usage of state.messageUsage.values()) {
     totalCost += usage.cost
-    total.input += usage.tokens.input
-    total.output += usage.tokens.output
-    total.reasoning += usage.tokens.reasoning
-    total.cacheRead += usage.tokens.cacheRead
-    total.cacheWrite += usage.tokens.cacheWrite
-    total.total += usage.tokens.total
+    total = addTokens(total, usage.tokens)
   }
 
   const signature = `${totalCost.toFixed(6)}:${total.input}:${total.output}:${total.reasoning}:${total.total}`
@@ -1158,19 +1176,12 @@ function messageUsageSignal(properties: Record<string, unknown>, state: Activity
 function combinedAssistantUsage(infos: AssistantMessage[], sessionID: string): ProgressUsage | undefined {
   if (infos.length === 0) return undefined
   let cost = 0
-  let tokens: ProgressTokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  let tokens = emptyTokens()
   for (const info of infos) {
     if (typeof info.cost === "number" && Number.isFinite(info.cost)) cost += info.cost
     const messageTokens = tokensFromValue(info.tokens)
     if (!messageTokens) continue
-    tokens = {
-      input: tokens.input + messageTokens.input,
-      output: tokens.output + messageTokens.output,
-      reasoning: tokens.reasoning + messageTokens.reasoning,
-      cacheRead: tokens.cacheRead + messageTokens.cacheRead,
-      cacheWrite: tokens.cacheWrite + messageTokens.cacheWrite,
-      total: tokens.total + messageTokens.total,
-    }
+    tokens = addTokens(tokens, messageTokens)
   }
   const last = infos[infos.length - 1]!
   const variant = last.variant ? `#${last.variant}` : ""
@@ -1183,23 +1194,6 @@ function usageFromRecord(values: Record<string, unknown>): ProgressUsage | undef
   const tokens = tokensFromValue(values.tokens)
   if (cost === undefined && !tokens) return undefined
   return { cost, tokens }
-}
-
-function tokensFromValue(value: unknown): ProgressTokens | undefined {
-  if (!value || typeof value !== "object") return undefined
-  const tokens = value as Record<string, unknown>
-  const input = numberToken(tokens.input)
-  const output = numberToken(tokens.output)
-  const reasoning = numberToken(tokens.reasoning)
-  const cache = tokens.cache && typeof tokens.cache === "object" ? (tokens.cache as Record<string, unknown>) : {}
-  const cacheRead = numberToken(cache.read)
-  const cacheWrite = numberToken(cache.write)
-  const total = typeof tokens.total === "number" && Number.isFinite(tokens.total) ? tokens.total : input + output + reasoning
-  return { input, output, reasoning, cacheRead, cacheWrite, total }
-}
-
-function numberToken(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
 function payloadID(payload: unknown) {

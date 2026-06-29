@@ -57,12 +57,17 @@ export type ProgressDiffSummary = {
 export type PermissionReply = "once" | "always" | "reject"
 
 /**
- * Shared mutable switch between the permission gate and the TUI: when enabled,
- * ask-level permissions are auto-allowed ("once"). The opencode-level denylist
- * is unaffected — denied commands never reach the gate at all.
- * Seeded by --yolo and toggled live with shift+tab in the dashboard.
+ * Shared mutable switch between the permission gate and the TUI, cycled live
+ * with shift+tab in the dashboard:
+ *   - "off":   every ask-level permission prompts the user.
+ *   - "all":   every ask-level permission is allowed blindly ("once").
+ *   - "smart": each request is handed to an external AI judge; safe ones are
+ *              allowed, risky (or unjudgeable) ones fall back to prompting.
+ * The opencode-level denylist is unaffected — denied commands never reach the
+ * gate at all. Seeded by --yolo ("all") / --smart ("smart").
  */
-export type AutoAccept = { enabled: boolean }
+export type AutoAcceptMode = "off" | "all" | "smart"
+export type AutoAccept = { mode: AutoAcceptMode }
 
 export type ProgressPhaseSnapshot = {
   status: "completed" | "skipped" | "failed"
@@ -81,6 +86,8 @@ export type PermissionPromptInfo = {
   target?: string
   description?: string
   sessionID?: string
+  /** Present when smart auto-accept's judge escalated this request; explains why. */
+  judgeReason?: string
 }
 
 export type RunOutcome = {

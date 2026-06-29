@@ -14,6 +14,7 @@ import {
 
 import { log } from "./log"
 import { openOpencodeSessionWindow } from "./opencode"
+import { PhaseUsage, addTokens, emptyTokens } from "./usage"
 import {
   formatAgo,
   formatCount,
@@ -44,6 +45,7 @@ import type { PaletteColor, PhaseStatus } from "./tui-theme"
 import type {
   ActivityKind,
   AutoAccept,
+  AutoAcceptMode,
   PermissionPromptInfo,
   PermissionReply,
   ProgressAttempt,
@@ -87,13 +89,16 @@ const permissionChoices: ReadonlyArray<{ reply: PermissionReply; label: string; 
   { reply: "reject", label: "reject", color: "red" },
 ]
 
-type UsageSessionState = {
-  cost: number
-  tokens: ProgressTokens
-  steps: number
-  model: string
-  reported: boolean
-  totalReported: boolean
+const autoAcceptAnnouncement: Record<AutoAcceptMode, string> = {
+  off: "auto-accept OFF: permissions prompt again",
+  all: "auto-accept ON: ask-level permissions will be allowed (denylist still applies)",
+  smart: "smart auto-accept ON: an AI judge allows safe requests and escalates risky ones",
+}
+
+function autoAcceptStatusChunk(mode: AutoAcceptMode): TextChunk {
+  if (mode === "all") return bold(fg(theme.yellow)(" auto-accept ON"))
+  if (mode === "smart") return bold(fg(theme.cyan)(" smart auto-accept"))
+  return fg(theme.dim)(" auto-accept off")
 }
 
 type PhaseState = ProgressPhase & {
@@ -108,8 +113,7 @@ type PhaseState = ProgressPhase & {
   stepCount: number
   lastStepModel: string
   usageReported: boolean
-  usageSessions: Map<string, UsageSessionState>
-  seenStepIDs: Set<string>
+  usage: PhaseUsage
   now: { kind: ActivityKind; message: string }
   todos: ProgressTodo[]
   diff?: ProgressDiffSummary
@@ -241,7 +245,7 @@ export class TuiProgress implements ProgressUI {
     if (key.name === "tab" && key.shift) {
       key.preventDefault()
       key.stopPropagation()
-      this.toggleAutoAccept()
+      this.cycleAutoAccept()
       return
     }
     if (this.permissionQueue.length > 0) {
@@ -272,8 +276,7 @@ export class TuiProgress implements ProgressUI {
       stepCount: 0,
       lastStepModel: "",
       usageReported: false,
-      usageSessions: new Map<string, UsageSessionState>(),
-      seenStepIDs: new Set<string>(),
+      usage: new PhaseUsage(),
       now: { kind: "info", message: "" },
       todos: [],
       updatedAt: Date.now(),
@@ -515,6 +518,9 @@ export class TuiProgress implements ProgressUI {
     const phase = this.findPhase(name)
     if (!phase) return
     phase.sessionID = sessionID
+    // Usage events without a sessionID belong to this phase's session, not a
+    // separate bucket.
+    phase.usage.fallbackSessionID = sessionID || "phase"
     phase.updatedAt = Date.now()
     this.activePhase = name
     this.addEvent(name, "system", `session ${shortID(sessionID)}`)
@@ -534,16 +540,7 @@ export class TuiProgress implements ProgressUI {
 
   phaseStepUsage(name: string, usage: ProgressStepUsage) {
     const phase = this.findPhase(name)
-    if (!phase || isDuplicateStep(phase, usage.stepID)) return
-
-    const session = this.usageSession(phase, usage.sessionID)
-    if (!session.totalReported) {
-      session.cost += safeCost(usage.cost)
-      if (usage.tokens) session.tokens = addTokens(session.tokens, usage.tokens)
-    }
-    session.steps += 1
-    session.model = usage.model || session.model
-    session.reported = true
+    if (!phase || !phase.usage.addStep(usage)) return
 
     phase.lastStepModel = usage.model || phase.lastStepModel
     phase.updatedAt = Date.now()
@@ -555,13 +552,7 @@ export class TuiProgress implements ProgressUI {
     const phase = this.findPhase(name)
     if (!phase) return
 
-    const session = this.usageSession(phase, usage.sessionID)
-    if (typeof usage.cost === "number") session.cost = safeCost(usage.cost)
-    if (usage.tokens) session.tokens = cloneTokens(usage.tokens)
-    session.model = usage.model || session.model
-    session.reported = true
-    session.totalReported = true
-
+    phase.usage.setTotal(usage)
     if (usage.model) phase.lastStepModel = usage.model
     phase.updatedAt = Date.now()
     this.recalculateUsage(phase)
@@ -608,12 +599,12 @@ export class TuiProgress implements ProgressUI {
     phase.sessionID = snapshot.sessionID ?? ""
     phase.restoredDurationMs = snapshot.durationMs
     if (snapshot.cost !== undefined || snapshot.tokens) {
-      const session = this.usageSession(phase, snapshot.sessionID || "restored")
-      session.cost = safeCost(snapshot.cost)
-      if (snapshot.tokens) session.tokens = cloneTokens(snapshot.tokens)
-      session.model = snapshot.model ?? ""
-      session.reported = true
-      session.totalReported = true
+      phase.usage.setTotal({
+        sessionID: snapshot.sessionID || "restored",
+        cost: snapshot.cost,
+        tokens: snapshot.tokens,
+        model: snapshot.model,
+      })
       this.recalculateUsage(phase)
     }
     if (snapshot.model) phase.lastStepModel = snapshot.model
@@ -630,8 +621,10 @@ export class TuiProgress implements ProgressUI {
   askPermission(info: PermissionPromptInfo): Promise<PermissionReply> {
     if (this.renderer.isDestroyed) return Promise.resolve("reject")
     // The gate checks auto-accept before prompting, but the toggle can flip
-    // between that check and this call; never show a prompt in auto mode.
-    if (this.autoAccept?.enabled) {
+    // between that check and this call; never show a prompt in "all" mode.
+    // "smart" decisions are made in the gate before this call, so reaching here
+    // in smart mode means the judge already escalated — show the prompt.
+    if (this.autoAccept?.mode === "all") {
       this.addEvent("archer", "permission", `auto-allowed: ${permissionSummary(info)}`)
       this.render()
       return Promise.resolve("once")
@@ -851,17 +844,15 @@ export class TuiProgress implements ProgressUI {
     this.render()
   }
 
-  private toggleAutoAccept() {
+  private cycleAutoAccept() {
     if (!this.autoAccept) return
-    this.autoAccept.enabled = !this.autoAccept.enabled
-    this.addEvent(
-      "archer",
-      "permission",
-      this.autoAccept.enabled
-        ? "auto-accept ON: ask-level permissions will be allowed (denylist still applies)"
-        : "auto-accept OFF: permissions prompt again",
-    )
-    if (this.autoAccept.enabled) {
+    const order = ["off", "all", "smart"] as const
+    const next = order[(order.indexOf(this.autoAccept.mode) + 1) % order.length]!
+    this.autoAccept.mode = next
+    this.addEvent("archer", "permission", autoAcceptAnnouncement[next])
+    // Only "all" clears the backlog blindly; "smart" leaves already-escalated
+    // prompts for the user (re-judging an open prompt would be surprising).
+    if (next === "all") {
       for (const pending of this.permissionQueue.splice(0)) {
         this.addEvent("archer", "permission", `auto-allowed: ${permissionSummary(pending.info)}`)
         pending.resolve("once")
@@ -952,31 +943,12 @@ export class TuiProgress implements ProgressUI {
     if (this.feed.length > feedLimit) this.feed.splice(0, this.feed.length - feedLimit)
   }
 
-  private usageSession(phase: PhaseState, sessionID?: string) {
-    const key = sessionID || phase.sessionID || "phase"
-    const existing = phase.usageSessions.get(key)
-    if (existing) return existing
-
-    const created: UsageSessionState = { cost: 0, tokens: emptyTokens(), steps: 0, model: "", reported: false, totalReported: false }
-    phase.usageSessions.set(key, created)
-    return created
-  }
-
   private recalculateUsage(phase: PhaseState) {
-    let cost = 0
-    let tokens = emptyTokens()
-    let stepCount = 0
-    let usageReported = false
-    for (const session of phase.usageSessions.values()) {
-      cost += session.cost
-      tokens = addTokens(tokens, session.tokens)
-      stepCount += session.steps
-      usageReported ||= session.reported
-    }
-    phase.cost = cost
-    phase.tokens = tokens
-    phase.stepCount = stepCount
-    phase.usageReported = usageReported
+    const totals = phase.usage.totals()
+    phase.cost = totals.cost
+    phase.tokens = totals.tokens
+    phase.stepCount = totals.steps
+    phase.usageReported = totals.reported
   }
 
   private render() {
@@ -1314,7 +1286,7 @@ export class TuiProgress implements ProgressUI {
     ]
     if (this.autoAccept) {
       left.push(fg(theme.dim)(" · "), fg(theme.accent)("shift+tab"))
-      left.push(this.autoAccept.enabled ? bold(fg(theme.yellow)(" auto-accept ON")) : fg(theme.dim)(" auto-accept off"))
+      left.push(autoAcceptStatusChunk(this.autoAccept.mode))
     }
     const quiet = now - this.lastActivityAt
     const right: TextChunk[] = [
@@ -1347,6 +1319,7 @@ export class TuiProgress implements ProgressUI {
       lines.push(new StyledText([fg(theme.dim)("pattern "), fg(theme.text)(truncate(info.patterns.join(", "), width - 8))]))
     }
     if (info.description) lines.push(t`${fg(theme.faint)(truncate(info.description, width))}`)
+    if (info.judgeReason) lines.push(new StyledText([fg(theme.yellow)("⚠ "), fg(theme.yellow)(truncate(info.judgeReason, width - 2))]))
     if (info.sessionID) lines.push(t`${fg(theme.faint)(`session ${shortID(info.sessionID)}`)}`)
     lines.push(plain(""))
 
@@ -1419,39 +1392,9 @@ function permissionSummary(info: PermissionPromptInfo) {
   return detail ? `${info.permission} · ${truncate(detail, 120)}` : info.permission
 }
 
-function emptyTokens(): ProgressTokens {
-  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-}
-
-function cloneTokens(tokens: ProgressTokens): ProgressTokens {
-  return { ...tokens }
-}
-
-function addTokens(left: ProgressTokens, right: ProgressTokens): ProgressTokens {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    reasoning: left.reasoning + right.reasoning,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    total: left.total + right.total,
-  }
-}
-
 function totalUsage(phases: PhaseState[]) {
   return phases.reduce(
     (usage, phase) => ({ cost: usage.cost + phase.cost, tokens: addTokens(usage.tokens, phase.tokens) }),
     { cost: 0, tokens: emptyTokens() },
   )
-}
-
-function isDuplicateStep(phase: PhaseState, stepID?: string) {
-  if (!stepID) return false
-  if (phase.seenStepIDs.has(stepID)) return true
-  phase.seenStepIDs.add(stepID)
-  return false
-}
-
-function safeCost(cost: number | undefined) {
-  return typeof cost === "number" && Number.isFinite(cost) ? cost : 0
 }

@@ -18,6 +18,11 @@ export const log = {
     if (muted) return
     console.error(color("33", `! ${message}`))
   },
+  // Real faults surface even while the TUI has muted ordinary logs; staying
+  // silent here is what hides production bugs.
+  error(message: string) {
+    console.error(color("31;1", `✗ ${message}`))
+  },
   section(message: string) {
     if (muted) return
     console.error("")

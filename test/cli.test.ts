@@ -105,6 +105,21 @@ describe("cli parsing", () => {
     if (yolo.type === "run") expect(yolo.options.yolo).toBe(true)
   })
 
+  test("smart auto-accept is opt-in and resolves a judge model", async () => {
+    const plain = await parseCommand(["prompt"])
+    // Unset, the judge model still resolves (falls back to the run's model).
+    if (plain.type === "run") {
+      expect(plain.options.smart).toBe(false)
+      expect(plain.options.smartJudgeModel.length).toBeGreaterThan(0)
+    }
+
+    const smart = await parseCommand(["--smart", "--smart-model", "anthropic/claude-haiku-4-5", "prompt"])
+    if (smart.type === "run") {
+      expect(smart.options.smart).toBe(true)
+      expect(smart.options.smartJudgeModel).toBe("anthropic/claude-haiku-4-5")
+    }
+  })
+
   test("parses the runs subcommand", async () => {
     const bare = await parseCommand(["runs"])
     expect(bare.type).toBe("runs")

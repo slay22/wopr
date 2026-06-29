@@ -120,6 +120,9 @@ archer config
 # auto-allow ask-level permissions (the hard denylist still applies)
 archer --prompt-file prd.md --yolo
 
+# smart auto-accept: an AI judge allows safe requests and escalates risky ones
+archer --prompt-file prd.md --smart --smart-model anthropic/claude-haiku-4-5
+
 # preserve run dir after completion
 archer --prompt-file prd.md --keep-run-dir
 
@@ -131,7 +134,7 @@ archer --prompt-file prd.md --base develop
 archer --prompt-file prd.md --include-dirty --max-attempts 1
 ```
 
-In interactive terminals, Archer shows a full-screen OpenTUI dashboard: pipeline progress with per-phase duration and cost, plus an activity panel headed by a compact summary of the active session (current tool/thinking/writing, the agent's todo list, files changed, step count, tokens, cost) above a color-coded event feed. The dashboard never paints backgrounds: the canvas is your terminal's own background and panels are delineated by borders alone, derived as subtle elevations of the terminal's reported background color, with dark or light accents picked by its brightness (and a neutral fallback when the terminal doesn't answer); floating modals repaint the reported color exactly to mask the content beneath them. It follows live theme changes. Press `o`, or click the footer, to open the active OpenCode session in a new terminal window attached to Archer's running OpenCode server — clicking any pipeline row opens that phase's session, including phases that already finished. Ghostty is preferred when installed; Terminal.app is the fallback (`ARCHER_TERMINAL=ghostty|terminal` forces a backend). Press `Shift+Tab` to toggle auto-accept (see the permission gate below). Press `Ctrl+C` once to abort the active OpenCode session and shut down Archer cleanly; press it again to force exit if cleanup hangs. The dashboard suspends for the whole `human-review` checkpoint — the prompts, your app command's output, and interactive OpenCode iterations own the terminal — and resumes when the gate finishes. Use `--no-tui` to fall back to plain logs.
+In interactive terminals, Archer shows a full-screen OpenTUI dashboard: pipeline progress with per-phase duration and cost, plus an activity panel headed by a compact summary of the active session (current tool/thinking/writing, the agent's todo list, files changed, step count, tokens, cost) above a color-coded event feed. The dashboard never paints backgrounds: the canvas is your terminal's own background and panels are delineated by borders alone, derived as subtle elevations of the terminal's reported background color, with dark or light accents picked by its brightness (and a neutral fallback when the terminal doesn't answer); floating modals repaint the reported color exactly to mask the content beneath them. It follows live theme changes. Press `o`, or click the footer, to open the active OpenCode session in a new terminal window attached to Archer's running OpenCode server — clicking any pipeline row opens that phase's session, including phases that already finished. Ghostty is preferred when installed; Terminal.app is the fallback (`ARCHER_TERMINAL=ghostty|terminal` forces a backend). Press `Shift+Tab` to cycle auto-accept modes — off, auto-accept, smart (see the permission gate below). Press `Ctrl+C` once to abort the active OpenCode session and shut down Archer cleanly; press it again to force exit if cleanup hangs. The dashboard suspends for the whole `human-review` checkpoint — the prompts, your app command's output, and interactive OpenCode iterations own the terminal — and resumes when the gate finishes. Use `--no-tui` to fall back to plain logs.
 
 When the run ends (success or failure), the dashboard doesn't close: it becomes a finish screen presenting the work done. The pipeline turns into a phase browser — move with `j`/`k` (or click a phase) to inspect each phase's outcome, duration, model, cost, diff, and its report (`PgUp`/`PgDn` scroll long reports). Press `o` to open the selected phase's OpenCode session in a new terminal window (the server stays alive while the screen is up), and `g` to open lazygit in the target repo as a subshell — `git log --graph --decorate --stat` is the fallback when lazygit isn't installed. Press `q`, `Esc`, or `Ctrl+C` to close; only then does Archer clean up the run dir and stop its OpenCode server. Failed runs pre-select the failed phase and show its error.
 
@@ -155,9 +158,15 @@ In non-interactive runs (no TTY), unknown commands are auto-rejected and logged.
 
 Archer also allowlists the target repo's own `package.json` scripts whose names look like checks (`test`, `lint`, `typecheck`, `type-check`, `check`, `build`, `format`, `validate`, including suffixed forms like `test:unit`), excluding anything whose name suggests side effects (`deploy`, `publish`, `release`, `migrate`, `seed`, `reset`). Note the trust model: agents can edit the repo, including script bodies, so allowlisted scripts mean trusting the repo's contents — the denylist protects against accidents, it is not a security boundary against a malicious agent.
 
-### Auto-accept (`--yolo` / `Shift+Tab`)
+### Auto-accept (`--yolo` / `--smart` / `Shift+Tab`)
 
-`--yolo` starts the run with auto-accept enabled: every permission request that would normally *ask* is allowed automatically (replied as "once") and logged to the activity feed. In the dashboard, `Shift+Tab` toggles auto-accept at any time — enabling it also resolves any prompts already queued. The footer always shows the current state. The hard denylist is enforced by OpenCode itself and is never relaxed: denied commands are rejected before they ever reach the gate, with or without `--yolo`.
+The permission gate has three states. In the dashboard, `Shift+Tab` cycles through them (`off → auto-accept → smart → off`) and the footer always shows the current one:
+
+- **off** — every request that would normally *ask* prompts you.
+- **auto-accept** (`--yolo`) — every ask-level request is allowed automatically (replied as "once") and logged to the activity feed. Switching into this state also resolves any prompts already queued.
+- **smart** (`--smart`) — each request is handed to an external AI judge running *outside* the agentic loop (a single stateless prompt with every tool disabled, so it can only classify, never act). Requests it judges safe — read-only, local, reversible, no secrets, no exfiltration — are auto-allowed with the reason logged; anything it flags as risky (or any judge error/timeout) falls back to prompting you, with the flag shown in the modal. It is deliberately fail-closed: uncertainty never auto-approves.
+
+The judge model is `--smart-model <provider/model[#variant]>`, falling back to `defaults.autoAcceptJudgeModel` in config, then the run's model. The hard denylist is enforced by OpenCode itself and is never relaxed: denied commands are rejected before they ever reach the gate, in every state.
 
 ## Commit safety
 
@@ -180,6 +189,7 @@ defaults:
   appRunCommand: pnpm dev          # app command for human-review gates
   emulator: Pixel_8                # optional Flutter emulator for human-review gates
   interactiveModel: openai/gpt-5.5#xhigh
+  autoAcceptJudgeModel: anthropic/claude-haiku-4-5   # model for smart auto-accept (--smart); defaults to the run's model
 
 # Project agents: the prompt lives at .archer/agents/<name>.md (required).
 # Naming a built-in agent here overrides its model/temperature instead.
@@ -240,7 +250,7 @@ Both files are merged before a run, with the project winning: `defaults`, `agent
 `archer config` opens a TUI to view and edit both configs without hand-editing YAML — two tabs, **Global** (`~/.archer/config.yaml`) and **Project** (the current repo's `.archer/config.yaml`):
 
 - Pick models from an autocompleting list: it queries OpenCode for the models your enabled providers expose (including reasoning variants like `#xhigh`), falling back to the full [models.dev](https://models.dev) catalog when OpenCode can't answer, and always accepts a free-typed `provider/model[#variant]`.
-- Edit `defaults` (model, interactiveModel, maxAttempts, baseRef, pipeline, app command, emulator) and each agent's model/temperature override.
+- Edit `defaults` (model, interactiveModel, autoAcceptJudgeModel, maxAttempts, baseRef, pipeline, app command, emulator) and each agent's model/temperature override.
 - Browse pipelines and their steps; add, delete, reorder steps, set a per-step model or max-attempts, and add new pipelines. Permissions and attachments are shown read-only (edit those in the YAML).
 - When a tab has no file yet, `initialize` writes a starter config (the built-in `default` pipeline, expanded and ready to edit).
 
@@ -332,6 +342,7 @@ archer/
 │   ├── agents.ts        # prompt loading, agent config, bash policy
 │   ├── project-context.ts # automatic .archer/rules.md, AGENTS.md, CLAUDE.md discovery
 │   ├── permissions.ts   # live permission gate for tool calls that fall outside the allowlist
+│   ├── safety-judge.ts  # external AI judge for smart auto-accept (tool-less, fail-closed)
 │   ├── attachments.ts   # FilePartInput for --file and internal attachments
 │   ├── git.ts           # diff, commit, and pre-commit secret scan
 │   ├── workspace.ts     # run dir, ~/.archer home (ARCHER_HOME), global config/agents paths

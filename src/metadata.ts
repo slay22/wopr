@@ -11,6 +11,7 @@ import type {
   ProgressUsage,
 } from "./progress"
 import type { Pipeline } from "./types"
+import { PhaseUsage } from "./usage"
 import type { Workspace } from "./workspace"
 
 export type PhaseMetadataStatus = "pending" | "running" | "completed" | "skipped" | "failed"
@@ -57,10 +58,14 @@ export async function openRunMetadata(workspace: Workspace, targetDir: string, p
   // First open freezes the pipeline; pre-pipeline (v1) runs adopt the current
   // one, whose default step names match what those runs executed.
   const effectivePipeline = (data.pipeline ??= pipeline)
-  // Usage events carry cumulative totals per opencode session; keeping the
-  // accumulators out of the persisted shape avoids ever re-counting on resume.
-  const usage = new Map<string, Map<string, UsageAccumulator>>()
-  const seenStepIDs = new Set<string>()
+  // One accumulator per phase. Kept out of the persisted shape — PhaseUsage holds
+  // cumulative per-session totals, so re-counting them on resume would double up.
+  const usage = new Map<string, PhaseUsage>()
+  const phaseUsage = (name: string) => {
+    let entry = usage.get(name)
+    if (!entry) usage.set(name, (entry = new PhaseUsage()))
+    return entry
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   // Single chain so a slow write can never interleave with the next one.
@@ -92,20 +97,13 @@ export async function openRunMetadata(workspace: Workspace, targetDir: string, p
   const phase = (name: string) => (data.phases[name] ??= { status: "pending" })
 
   const recalculate = (name: string) => {
-    const sessions = usage.get(name)
-    if (!sessions || sessions.size === 0) return
+    const accumulator = usage.get(name)
+    if (!accumulator || accumulator.isEmpty) return
+    const totals = accumulator.totals()
     const entry = phase(name)
-    let cost = 0
-    let tokens = emptyTokens()
-    let model = ""
-    for (const session of sessions.values()) {
-      cost += session.cost
-      tokens = addTokens(tokens, session.tokens)
-      model = session.model || model
-    }
-    entry.cost = cost
-    entry.tokens = tokens
-    if (model) entry.model = model
+    entry.cost = totals.cost
+    entry.tokens = totals.tokens
+    if (totals.model) entry.model = totals.model
   }
 
   void persist()
@@ -137,25 +135,12 @@ export async function openRunMetadata(workspace: Workspace, targetDir: string, p
       void persist()
     },
     phaseStepUsage(name, usage_) {
-      if (usage_.stepID) {
-        if (seenStepIDs.has(usage_.stepID)) return
-        seenStepIDs.add(usage_.stepID)
-      }
-      const session = usageSession(usage, name, usage_.sessionID)
-      if (!session.totalReported) {
-        session.cost += safeCost(usage_.cost)
-        if (usage_.tokens) session.tokens = addTokens(session.tokens, usage_.tokens)
-      }
-      session.model = usage_.model || session.model
+      if (!phaseUsage(name).addStep(usage_)) return
       recalculate(name)
       scheduleSave()
     },
     phaseUsageTotal(name, usage_) {
-      const session = usageSession(usage, name, usage_.sessionID)
-      if (typeof usage_.cost === "number") session.cost = safeCost(usage_.cost)
-      if (usage_.tokens) session.tokens = { ...usage_.tokens }
-      session.model = usage_.model || session.model
-      session.totalReported = true
+      phaseUsage(name).setTotal(usage_)
       recalculate(name)
       scheduleSave()
     },
@@ -224,28 +209,6 @@ export function recordProgress(progress: ProgressUI, store: RunMetadataStore): P
   return recorder
 }
 
-type UsageAccumulator = {
-  cost: number
-  tokens: ProgressTokens
-  model: string
-  totalReported: boolean
-}
-
-function usageSession(usage: Map<string, Map<string, UsageAccumulator>>, name: string, sessionID?: string) {
-  let sessions = usage.get(name)
-  if (!sessions) {
-    sessions = new Map()
-    usage.set(name, sessions)
-  }
-  const key = sessionID || "phase"
-  let session = sessions.get(key)
-  if (!session) {
-    session = { cost: 0, tokens: emptyTokens(), model: "", totalReported: false }
-    sessions.set(key, session)
-  }
-  return session
-}
-
 async function loadMetadata(path: string, runID: string): Promise<RunMetadata | undefined> {
   const parsed = await readRunMetadata(path)
   return parsed ? { ...parsed, runID } : undefined
@@ -276,23 +239,4 @@ export async function readRunMetadata(path: string): Promise<RunMetadata | undef
 function newMetadata(runID: string, targetDir: string): RunMetadata {
   const now = Date.now()
   return { schemaVersion: 2, runID, targetDir, createdAt: now, updatedAt: now, phases: {} }
-}
-
-function emptyTokens(): ProgressTokens {
-  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-}
-
-function addTokens(left: ProgressTokens, right: ProgressTokens): ProgressTokens {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    reasoning: left.reasoning + right.reasoning,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    total: left.total + right.total,
-  }
-}
-
-function safeCost(cost: number | undefined) {
-  return typeof cost === "number" && Number.isFinite(cost) ? cost : 0
 }

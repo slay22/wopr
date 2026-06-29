@@ -35,6 +35,8 @@ export type ParsedArgs = {
   targetDir: string
   includeDirty?: boolean
   yolo?: boolean
+  smart?: boolean
+  smartModel?: string
 }
 
 export type CliCommand =
@@ -130,7 +132,12 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
   if (!humanReview) pipeline = { ...pipeline, steps: pipeline.steps.filter((step) => step.type !== "human") }
 
   if (parsed.modelOverride) parseModel(splitModelVariant(parsed.modelOverride).model)
+  if (parsed.smartModel) parseModel(splitModelVariant(parsed.smartModel).model)
   const interactive = resolveInteractiveModel(parsed, defaults)
+  // Smart auto-accept always needs a concrete judge model; resolve the fallback
+  // chain here so the runner can stay oblivious to config and built-in defaults.
+  const smartJudgeModel =
+    parsed.smartModel || defaults.autoAcceptJudgeModel || parsed.modelOverride || defaults.model || `${defaultGptModel}#${defaultGptVariant}`
 
   const options: Omit<RunOptions, "prompt"> = {
     files: [...(config?.attachments ?? []), ...parsed.files],
@@ -150,6 +157,8 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     targetDir: parsed.targetDir,
     includeDirty: parsed.includeDirty ?? false,
     yolo: parsed.yolo ?? false,
+    smart: parsed.smart ?? false,
+    smartJudgeModel,
     pipeline,
     agents,
     permissions: config?.permissions ?? { allow: [], deny: [] },
@@ -237,6 +246,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break
       case "--yolo":
         parsed.yolo = true
+        break
+      case "--smart":
+        parsed.smart = true
+        break
+      case "--smart-model":
+        parsed.smartModel = takeValue()
         break
       case "--model":
         parsed.modelOverride = takeValue()
@@ -329,7 +344,9 @@ Flags:
   --resume <id>            Resume a previous run by its ID (steps with an existing report are
                            skipped; the run replays the pipeline it started with)
   --keep-run-dir           Don't delete the run dir when done
-  --yolo                   Auto-allow ask-level permissions (hard denylist still applies; shift+tab toggles it live in the TUI)
+  --yolo                   Auto-allow ask-level permissions (hard denylist still applies; shift+tab cycles it live in the TUI)
+  --smart                  Smart auto-accept: an AI judge auto-allows safe ask-level requests and escalates risky ones (shift+tab cycles)
+  --smart-model <provider/model[#variant]> Model for the smart auto-accept judge (default: defaults.autoAcceptJudgeModel, else the run's model)
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
   --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)

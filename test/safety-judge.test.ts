@@ -1,0 +1,81 @@
+import { describe, expect, test } from "bun:test"
+
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+
+import { judgeCommand, parseVerdict } from "../src/safety-judge"
+
+describe("parseVerdict", () => {
+  test("reads a clean JSON verdict", () => {
+    expect(parseVerdict('{"safe": true, "reason": "read-only listing"}')).toEqual({ safe: true, reason: "read-only listing" })
+    expect(parseVerdict('{"safe": false, "reason": "rm -rf is destructive"}')).toEqual({ safe: false, reason: "rm -rf is destructive" })
+  })
+
+  test("tolerates code fences and surrounding prose", () => {
+    const fenced = "Here is my call:\n```json\n{\"safe\": true, \"reason\": \"runs the test suite\"}\n```\nDone."
+    expect(parseVerdict(fenced)).toEqual({ safe: true, reason: "runs the test suite" })
+  })
+
+  test("supplies a default reason when missing", () => {
+    expect(parseVerdict('{"safe": true}')).toEqual({ safe: true, reason: "judged safe" })
+    expect(parseVerdict('{"safe": false, "reason": "   "}')).toEqual({ safe: false, reason: "judged unsafe" })
+  })
+
+  test("fails closed on unparseable or non-boolean answers", () => {
+    expect(parseVerdict("")).toBeUndefined()
+    expect(parseVerdict("looks fine to me")).toBeUndefined()
+    expect(parseVerdict("{ not json")).toBeUndefined()
+    expect(parseVerdict('{"safe": "yes"}')).toBeUndefined()
+    expect(parseVerdict("[]")).toBeUndefined()
+  })
+})
+
+type FakeClientOptions = {
+  promptText?: string
+  promptThrows?: boolean
+  onDelete?: (id: string) => void
+}
+
+function fakeClient(opts: FakeClientOptions): OpencodeClient {
+  return {
+    session: {
+      create: async () => ({ data: { id: "judge-session" }, error: undefined }),
+      prompt: async () => {
+        if (opts.promptThrows) throw new Error("provider unavailable")
+        return { data: { info: {}, parts: [{ type: "text", text: opts.promptText ?? "" }] }, error: undefined }
+      },
+      delete: async ({ sessionID }: { sessionID: string }) => {
+        opts.onDelete?.(sessionID)
+        return { data: undefined, error: undefined }
+      },
+    },
+  } as unknown as OpencodeClient
+}
+
+const request = { permission: "bash", command: "ls -la" }
+const model = { providerID: "openai", modelID: "gpt-5.5" }
+
+describe("judgeCommand", () => {
+  test("returns the model's verdict on a clean answer", async () => {
+    const client = fakeClient({ promptText: '{"safe": true, "reason": "lists files"}' })
+    expect(await judgeCommand(client, { request, model, directory: "/tmp" })).toEqual({ safe: true, reason: "lists files" })
+  })
+
+  test("fails closed when the judge call throws", async () => {
+    const client = fakeClient({ promptThrows: true })
+    const verdict = await judgeCommand(client, { request, model, directory: "/tmp" })
+    expect(verdict.safe).toBe(false)
+    expect(verdict.reason).toContain("safety check failed")
+  })
+
+  test("fails closed when the answer is unparseable", async () => {
+    const client = fakeClient({ promptText: "I think it is probably fine" })
+    expect((await judgeCommand(client, { request, model, directory: "/tmp" })).safe).toBe(false)
+  })
+
+  test("cleans up the throwaway session", async () => {
+    let deleted: string | undefined
+    const client = fakeClient({ promptText: '{"safe": true}', onDelete: (id) => (deleted = id) })
+    await judgeCommand(client, { request, model, directory: "/tmp" })
+    expect(deleted).toBe("judge-session")
+  })
+})
