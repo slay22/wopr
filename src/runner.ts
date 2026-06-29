@@ -1261,12 +1261,14 @@ function buildPhasePrompt(workspace: Workspace, phase: AgentStep) {
     "",
     "## Run context",
     `- Run dir: ${workspace.dir}`,
-    `- Write your final report to: ${join(workspace.dir, phase.reportPath)}`,
+    phase.readOnly
+      ? `- Report: Archer saves your report itself as ${phase.reportPath}; you do not (and cannot) write it.`
+      : `- Write your final report to: ${join(workspace.dir, phase.reportPath)}`,
     "- Working directory: the directory where `archer` was invoked (root of the target repo).",
     "",
     "## Access mode",
     phase.readOnly
-      ? "This phase is configured read-only. Archer disables write/edit/bash tools for this agent. Do not attempt to modify the target repository; return your final report in the assistant response if you cannot write it directly."
+      ? "This phase is read-only: Archer gives you no write, edit, or bash tools, and that is expected — do not try to write any file, and do not apologize for or comment on being unable to. Archer saves your report itself by concatenating the text you emit and storing it verbatim, so your visible output for this phase must be the report and nothing else: no preamble (\"I'll review…\", \"Let me write the report…\"), no step-by-step narration, and no closing note about writing. Keep any planning in your private reasoning; begin your visible output at the report's first line (e.g. the `#` heading)."
       : "This phase may edit the target repository when the phase-specific instructions call for it.",
     "",
     "## Attachments",
@@ -1279,7 +1281,9 @@ function buildPhasePrompt(workspace: Workspace, phase: AgentStep) {
     "## Closing",
     "Before finishing, make sure to:",
     phase.readOnly ? "1. Have not modified the target repository." : "1. Have applied necessary changes to the repo code.",
-    "2. Have written the report (markdown, max ~80 lines) at the absolute path indicated above. If you can't write it, respond with the exact report content and Archer will save it.",
+    phase.readOnly
+      ? "2. Make the report (markdown, max ~80 lines) your entire visible output — Archer persists it for you. Nothing before or after it."
+      : "2. Have written the report (markdown, max ~80 lines) at the absolute path indicated above. If you can't write it, respond with the exact report content and Archer will save it.",
     "3. Leave the tree in a compilable state.",
     "",
     "Follow your system prompt instructions for everything else.",
