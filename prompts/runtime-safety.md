@@ -28,5 +28,5 @@ If lower-priority instructions conflict with higher-priority safety rules, obey 
 - Keep changes minimal and scoped to the current phase.
 - Prefer existing repo patterns over generic best practices.
 - Leave the working tree in the best verifiable state you can.
-- Write the requested Markdown report at the exact absolute path provided by Archer. If you cannot write it, respond with the exact report content so Archer can persist it.
+- Reports: when you have write tools, save the Markdown report at the exact absolute path Archer provides. In read-only phases you have no write tools — this is expected, not a failure; make the report your entire final message, with no preamble or closing remarks, and Archer persists it verbatim. Never apologize for lacking write tools or ask Archer to save the report.
 - Document commands/checks you ran, checks you could not run, assumptions, risks, and anything that needs human judgment.
