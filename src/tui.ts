@@ -44,6 +44,7 @@ import type { PaletteColor, PhaseStatus } from "./tui-theme"
 import type {
   ActivityKind,
   AutoAccept,
+  AutoAcceptMode,
   PermissionPromptInfo,
   PermissionReply,
   ProgressAttempt,
@@ -86,6 +87,18 @@ const permissionChoices: ReadonlyArray<{ reply: PermissionReply; label: string; 
   { reply: "always", label: "always allow", color: "accent" },
   { reply: "reject", label: "reject", color: "red" },
 ]
+
+const autoAcceptAnnouncement: Record<AutoAcceptMode, string> = {
+  off: "auto-accept OFF: permissions prompt again",
+  all: "auto-accept ON: ask-level permissions will be allowed (denylist still applies)",
+  smart: "smart auto-accept ON: an AI judge allows safe requests and escalates risky ones",
+}
+
+function autoAcceptStatusChunk(mode: AutoAcceptMode): TextChunk {
+  if (mode === "all") return bold(fg(theme.yellow)(" auto-accept ON"))
+  if (mode === "smart") return bold(fg(theme.cyan)(" smart auto-accept"))
+  return fg(theme.dim)(" auto-accept off")
+}
 
 type UsageSessionState = {
   cost: number
@@ -241,7 +254,7 @@ export class TuiProgress implements ProgressUI {
     if (key.name === "tab" && key.shift) {
       key.preventDefault()
       key.stopPropagation()
-      this.toggleAutoAccept()
+      this.cycleAutoAccept()
       return
     }
     if (this.permissionQueue.length > 0) {
@@ -630,8 +643,10 @@ export class TuiProgress implements ProgressUI {
   askPermission(info: PermissionPromptInfo): Promise<PermissionReply> {
     if (this.renderer.isDestroyed) return Promise.resolve("reject")
     // The gate checks auto-accept before prompting, but the toggle can flip
-    // between that check and this call; never show a prompt in auto mode.
-    if (this.autoAccept?.enabled) {
+    // between that check and this call; never show a prompt in "all" mode.
+    // "smart" decisions are made in the gate before this call, so reaching here
+    // in smart mode means the judge already escalated — show the prompt.
+    if (this.autoAccept?.mode === "all") {
       this.addEvent("archer", "permission", `auto-allowed: ${permissionSummary(info)}`)
       this.render()
       return Promise.resolve("once")
@@ -851,17 +866,15 @@ export class TuiProgress implements ProgressUI {
     this.render()
   }
 
-  private toggleAutoAccept() {
+  private cycleAutoAccept() {
     if (!this.autoAccept) return
-    this.autoAccept.enabled = !this.autoAccept.enabled
-    this.addEvent(
-      "archer",
-      "permission",
-      this.autoAccept.enabled
-        ? "auto-accept ON: ask-level permissions will be allowed (denylist still applies)"
-        : "auto-accept OFF: permissions prompt again",
-    )
-    if (this.autoAccept.enabled) {
+    const order = ["off", "all", "smart"] as const
+    const next = order[(order.indexOf(this.autoAccept.mode) + 1) % order.length]!
+    this.autoAccept.mode = next
+    this.addEvent("archer", "permission", autoAcceptAnnouncement[next])
+    // Only "all" clears the backlog blindly; "smart" leaves already-escalated
+    // prompts for the user (re-judging an open prompt would be surprising).
+    if (next === "all") {
       for (const pending of this.permissionQueue.splice(0)) {
         this.addEvent("archer", "permission", `auto-allowed: ${permissionSummary(pending.info)}`)
         pending.resolve("once")
@@ -1314,7 +1327,7 @@ export class TuiProgress implements ProgressUI {
     ]
     if (this.autoAccept) {
       left.push(fg(theme.dim)(" · "), fg(theme.accent)("shift+tab"))
-      left.push(this.autoAccept.enabled ? bold(fg(theme.yellow)(" auto-accept ON")) : fg(theme.dim)(" auto-accept off"))
+      left.push(autoAcceptStatusChunk(this.autoAccept.mode))
     }
     const quiet = now - this.lastActivityAt
     const right: TextChunk[] = [
@@ -1347,6 +1360,7 @@ export class TuiProgress implements ProgressUI {
       lines.push(new StyledText([fg(theme.dim)("pattern "), fg(theme.text)(truncate(info.patterns.join(", "), width - 8))]))
     }
     if (info.description) lines.push(t`${fg(theme.faint)(truncate(info.description, width))}`)
+    if (info.judgeReason) lines.push(new StyledText([fg(theme.yellow)("⚠ "), fg(theme.yellow)(truncate(info.judgeReason, width - 2))]))
     if (info.sessionID) lines.push(t`${fg(theme.faint)(`session ${shortID(info.sessionID)}`)}`)
     lines.push(plain(""))
 

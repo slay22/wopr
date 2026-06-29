@@ -18,6 +18,10 @@ export type RunOptions = {
   includeDirty: boolean
   /** Start with auto-accept enabled: ask-level permissions are allowed without prompting (denylist still applies). */
   yolo: boolean
+  /** Start in smart auto-accept: an AI judge allows requests it deems safe and escalates risky ones. */
+  smart: boolean
+  /** Resolved model for the smart auto-accept judge (--smart-model → config → --model → defaults.model). */
+  smartJudgeModel: string
   /** Resolved pipeline for new runs; resumed runs replay the pipeline frozen in their metadata. */
   pipeline: Pipeline
   /** Resolved agent registry (built-ins plus project agents) used to assemble the opencode config. */

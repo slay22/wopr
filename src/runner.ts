@@ -160,7 +160,10 @@ export async function run(options: RunOptions) {
   const shutdown = new RunShutdown()
   const removeSignalHandlers = installShutdownSignals(shutdown)
 
-  const autoAccept: AutoAccept = { enabled: options.yolo }
+  const autoAccept: AutoAccept = { mode: options.yolo ? "all" : options.smart ? "smart" : "off" }
+  // cli.ts always resolves a concrete model string (--smart-model → config →
+  // --model → defaults.model), so smart mode never lacks a judge.
+  const judgeModel = parseModel(splitModelVariant(options.smartJudgeModel).model)
 
   try {
     metadata = await openRunMetadata(workspace, options.targetDir, options.pipeline)
@@ -182,6 +185,9 @@ export async function run(options: RunOptions) {
     if (options.yolo) {
       progress.message("YOLO enabled: ask-level permissions will be auto-allowed (denylist still applies); shift+tab toggles")
       log.warn("YOLO enabled: unknown non-denied commands will be auto-allowed")
+    } else if (options.smart) {
+      progress.message(`smart auto-accept enabled: ${formatModel(judgeModel)} judges each request; risky ones still prompt (shift+tab toggles)`)
+      log.warn(`smart auto-accept enabled: ${formatModel(judgeModel)} will auto-allow requests it judges safe`)
     }
 
     const extraFiles = await fileParts(options.files, options.targetDir, "error")
@@ -209,6 +215,7 @@ export async function run(options: RunOptions) {
       interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
       directory: options.targetDir,
       autoAccept,
+      judgeModel,
     })
 
     const resuming = Boolean(options.resumeRunID)

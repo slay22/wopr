@@ -87,6 +87,7 @@ type Row = {
 const defaultFields: DefaultField[] = [
   { key: "model", type: "model" },
   { key: "interactiveModel", type: "model" },
+  { key: "autoAcceptJudgeModel", type: "model" },
   { key: "maxAttempts", type: "number" },
   { key: "baseRef", type: "string" },
   { key: "pipeline", type: "string" },
@@ -1098,6 +1099,8 @@ function describeDefault(key: keyof ArcherDefaults): string {
       return "Default model for steps with no model of their own."
     case "interactiveModel":
       return "Model used by manual OpenCode iterations in human-review."
+    case "autoAcceptJudgeModel":
+      return "Model the smart auto-accept judge uses (falls back to the run's model)."
     case "maxAttempts":
       return "Attempts per step before failing."
     case "baseRef":

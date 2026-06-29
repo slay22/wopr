@@ -38,6 +38,8 @@ export type ArcherDefaults = {
   appRunCommand?: string
   emulator?: string
   interactiveModel?: string
+  /** Model for the smart auto-accept judge; falls back to the run's model when unset. */
+  autoAcceptJudgeModel?: string
 }
 
 /** A project agent definition, or model/temperature overrides for a built-in one. */
@@ -146,7 +148,7 @@ export function parseArcherConfig(body: string, source: string, targetDir: strin
 
 function validateDefaults(v: Validator, raw: unknown): ArcherDefaults {
   const record = v.record(raw, "defaults")
-  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "appRunCommand", "emulator", "interactiveModel"])
+  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "appRunCommand", "emulator", "interactiveModel", "autoAcceptJudgeModel"])
 
   const defaults: ArcherDefaults = {}
   if (record.model !== undefined) defaults.model = v.model(record.model, "defaults.model")
@@ -156,6 +158,7 @@ function validateDefaults(v: Validator, raw: unknown): ArcherDefaults {
   if (record.appRunCommand !== undefined) defaults.appRunCommand = v.nonEmptyString(record.appRunCommand, "defaults.appRunCommand")
   if (record.emulator !== undefined) defaults.emulator = v.nonEmptyString(record.emulator, "defaults.emulator")
   if (record.interactiveModel !== undefined) defaults.interactiveModel = v.model(record.interactiveModel, "defaults.interactiveModel")
+  if (record.autoAcceptJudgeModel !== undefined) defaults.autoAcceptJudgeModel = v.model(record.autoAcceptJudgeModel, "defaults.autoAcceptJudgeModel")
   return defaults
 }
 
