@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 
-import { paletteForMode, paletteForTerminal } from "../src/tui-theme"
+import type { CliRenderer } from "@opentui/core"
+import { paletteForMode, paletteForTerminal, terminalBackgroundHex } from "../src/tui-theme"
+
+// terminalBackgroundHex reaches into opentui internals; the adapter must read a
+// real reply but degrade to undefined (→ static palettes) on any shape change.
+const fakeRenderer = (themeModeState: unknown) => ({ themeModeState }) as unknown as CliRenderer
 
 describe("palette derivation from the terminal background", () => {
   test("dark background: transparent canvas, borders lifted toward white, overlay repaints the terminal", () => {
@@ -36,6 +41,20 @@ describe("palette derivation from the terminal background", () => {
   test("falls back to the static palettes without a usable background", () => {
     expect(paletteForTerminal("dark", undefined)).toBe(paletteForMode("dark"))
     expect(paletteForTerminal(null, "not-a-color")).toBe(paletteForMode(null))
+  })
+
+  test("reads a real OSC background reply but fails safe on a changed internal shape", () => {
+    // A usable reply is read straight through.
+    expect(terminalBackgroundHex(fakeRenderer({ themeOscBackground: "#1a1b26" }))).toBe("#1a1b26")
+
+    // Anything that isn't a parseable hex string degrades to undefined.
+    expect(terminalBackgroundHex(fakeRenderer({ themeOscBackground: "not-a-color" }))).toBeUndefined()
+    expect(terminalBackgroundHex(fakeRenderer({ themeOscBackground: 0x1a1b26 }))).toBeUndefined()
+
+    // A dependency upgrade that drops or renames the internal state must not throw.
+    expect(terminalBackgroundHex(fakeRenderer(undefined))).toBeUndefined()
+    expect(terminalBackgroundHex(fakeRenderer({}))).toBeUndefined()
+    expect(terminalBackgroundHex({} as unknown as CliRenderer)).toBeUndefined()
   })
 
   test("no palette ever paints a panel background", () => {

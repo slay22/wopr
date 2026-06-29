@@ -9,6 +9,7 @@ import {
   UserAbortError,
   commitRecoveredPhase,
   describeSessionActivity,
+  isIgnorableRejection,
   newActivityState,
   parseModel,
   restorePhaseFromPreviousRun,
@@ -184,6 +185,21 @@ describe("runner helpers", () => {
     expect(shouldRetryAttempt(new Error("aborted fetch"), controller.signal, 1, 2)).toBe(false)
     expect(shouldRetryAttempt(new UserAbortError(), new AbortController().signal, 1, 2)).toBe(false)
     expect(shouldRetryAttempt(new Error("exhausted"), new AbortController().signal, 2, 2)).toBe(false)
+  })
+
+  test("only the benign SSE abort is ignorable; real faults must surface", () => {
+    // The known-benign cases swallowed at the process level.
+    expect(isIgnorableRejection(new UserAbortError())).toBe(true)
+    const abortError = new Error("The operation was aborted")
+    abortError.name = "AbortError"
+    expect(isIgnorableRejection(abortError)).toBe(true)
+    expect(isIgnorableRejection(new Error("request was aborted"))).toBe(true)
+
+    // Everything else is a real fault and stays visible.
+    expect(isIgnorableRejection(new Error("Cannot read properties of undefined"))).toBe(false)
+    expect(isIgnorableRejection(new TypeError("boom"))).toBe(false)
+    expect(isIgnorableRejection("aborted")).toBe(false)
+    expect(isIgnorableRejection(undefined)).toBe(false)
   })
 })
 

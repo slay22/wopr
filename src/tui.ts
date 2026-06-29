@@ -14,6 +14,7 @@ import {
 
 import { log } from "./log"
 import { openOpencodeSessionWindow } from "./opencode"
+import { PhaseUsage, addTokens, emptyTokens } from "./usage"
 import {
   formatAgo,
   formatCount,
@@ -100,15 +101,6 @@ function autoAcceptStatusChunk(mode: AutoAcceptMode): TextChunk {
   return fg(theme.dim)(" auto-accept off")
 }
 
-type UsageSessionState = {
-  cost: number
-  tokens: ProgressTokens
-  steps: number
-  model: string
-  reported: boolean
-  totalReported: boolean
-}
-
 type PhaseState = ProgressPhase & {
   status: PhaseStatus
   sessionID: string
@@ -121,8 +113,7 @@ type PhaseState = ProgressPhase & {
   stepCount: number
   lastStepModel: string
   usageReported: boolean
-  usageSessions: Map<string, UsageSessionState>
-  seenStepIDs: Set<string>
+  usage: PhaseUsage
   now: { kind: ActivityKind; message: string }
   todos: ProgressTodo[]
   diff?: ProgressDiffSummary
@@ -285,8 +276,7 @@ export class TuiProgress implements ProgressUI {
       stepCount: 0,
       lastStepModel: "",
       usageReported: false,
-      usageSessions: new Map<string, UsageSessionState>(),
-      seenStepIDs: new Set<string>(),
+      usage: new PhaseUsage(),
       now: { kind: "info", message: "" },
       todos: [],
       updatedAt: Date.now(),
@@ -528,6 +518,9 @@ export class TuiProgress implements ProgressUI {
     const phase = this.findPhase(name)
     if (!phase) return
     phase.sessionID = sessionID
+    // Usage events without a sessionID belong to this phase's session, not a
+    // separate bucket.
+    phase.usage.fallbackSessionID = sessionID || "phase"
     phase.updatedAt = Date.now()
     this.activePhase = name
     this.addEvent(name, "system", `session ${shortID(sessionID)}`)
@@ -547,16 +540,7 @@ export class TuiProgress implements ProgressUI {
 
   phaseStepUsage(name: string, usage: ProgressStepUsage) {
     const phase = this.findPhase(name)
-    if (!phase || isDuplicateStep(phase, usage.stepID)) return
-
-    const session = this.usageSession(phase, usage.sessionID)
-    if (!session.totalReported) {
-      session.cost += safeCost(usage.cost)
-      if (usage.tokens) session.tokens = addTokens(session.tokens, usage.tokens)
-    }
-    session.steps += 1
-    session.model = usage.model || session.model
-    session.reported = true
+    if (!phase || !phase.usage.addStep(usage)) return
 
     phase.lastStepModel = usage.model || phase.lastStepModel
     phase.updatedAt = Date.now()
@@ -568,13 +552,7 @@ export class TuiProgress implements ProgressUI {
     const phase = this.findPhase(name)
     if (!phase) return
 
-    const session = this.usageSession(phase, usage.sessionID)
-    if (typeof usage.cost === "number") session.cost = safeCost(usage.cost)
-    if (usage.tokens) session.tokens = cloneTokens(usage.tokens)
-    session.model = usage.model || session.model
-    session.reported = true
-    session.totalReported = true
-
+    phase.usage.setTotal(usage)
     if (usage.model) phase.lastStepModel = usage.model
     phase.updatedAt = Date.now()
     this.recalculateUsage(phase)
@@ -621,12 +599,12 @@ export class TuiProgress implements ProgressUI {
     phase.sessionID = snapshot.sessionID ?? ""
     phase.restoredDurationMs = snapshot.durationMs
     if (snapshot.cost !== undefined || snapshot.tokens) {
-      const session = this.usageSession(phase, snapshot.sessionID || "restored")
-      session.cost = safeCost(snapshot.cost)
-      if (snapshot.tokens) session.tokens = cloneTokens(snapshot.tokens)
-      session.model = snapshot.model ?? ""
-      session.reported = true
-      session.totalReported = true
+      phase.usage.setTotal({
+        sessionID: snapshot.sessionID || "restored",
+        cost: snapshot.cost,
+        tokens: snapshot.tokens,
+        model: snapshot.model,
+      })
       this.recalculateUsage(phase)
     }
     if (snapshot.model) phase.lastStepModel = snapshot.model
@@ -965,31 +943,12 @@ export class TuiProgress implements ProgressUI {
     if (this.feed.length > feedLimit) this.feed.splice(0, this.feed.length - feedLimit)
   }
 
-  private usageSession(phase: PhaseState, sessionID?: string) {
-    const key = sessionID || phase.sessionID || "phase"
-    const existing = phase.usageSessions.get(key)
-    if (existing) return existing
-
-    const created: UsageSessionState = { cost: 0, tokens: emptyTokens(), steps: 0, model: "", reported: false, totalReported: false }
-    phase.usageSessions.set(key, created)
-    return created
-  }
-
   private recalculateUsage(phase: PhaseState) {
-    let cost = 0
-    let tokens = emptyTokens()
-    let stepCount = 0
-    let usageReported = false
-    for (const session of phase.usageSessions.values()) {
-      cost += session.cost
-      tokens = addTokens(tokens, session.tokens)
-      stepCount += session.steps
-      usageReported ||= session.reported
-    }
-    phase.cost = cost
-    phase.tokens = tokens
-    phase.stepCount = stepCount
-    phase.usageReported = usageReported
+    const totals = phase.usage.totals()
+    phase.cost = totals.cost
+    phase.tokens = totals.tokens
+    phase.stepCount = totals.steps
+    phase.usageReported = totals.reported
   }
 
   private render() {
@@ -1433,39 +1392,9 @@ function permissionSummary(info: PermissionPromptInfo) {
   return detail ? `${info.permission} · ${truncate(detail, 120)}` : info.permission
 }
 
-function emptyTokens(): ProgressTokens {
-  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-}
-
-function cloneTokens(tokens: ProgressTokens): ProgressTokens {
-  return { ...tokens }
-}
-
-function addTokens(left: ProgressTokens, right: ProgressTokens): ProgressTokens {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    reasoning: left.reasoning + right.reasoning,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    total: left.total + right.total,
-  }
-}
-
 function totalUsage(phases: PhaseState[]) {
   return phases.reduce(
     (usage, phase) => ({ cost: usage.cost + phase.cost, tokens: addTokens(usage.tokens, phase.tokens) }),
     { cost: 0, tokens: emptyTokens() },
   )
-}
-
-function isDuplicateStep(phase: PhaseState, stepID?: string) {
-  if (!stepID) return false
-  if (phase.seenStepIDs.has(stepID)) return true
-  phase.seenStepIDs.add(stepID)
-  return false
-}
-
-function safeCost(cost: number | undefined) {
-  return typeof cost === "number" && Number.isFinite(cost) ? cost : 0
 }
