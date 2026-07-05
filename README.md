@@ -1,6 +1,6 @@
 # archer
 
-Archer is a higher-level orchestration harness for [OpenCode](https://opencode.ai) that turns a PRD into a structured, reviewable implementation workflow. It coordinates specialized agents across implementation, human review, pattern alignment, security, design polish, tests, and adversarial review; adapts to the target repo's stack and conventions; and leaves one commit per phase.
+Archer is a higher-level orchestration harness for [OpenCode](https://opencode.ai) that turns a PRD into a structured, reviewable implementation workflow. It coordinates specialized agents across implementation, pattern alignment, security, design polish, tests, and adversarial review; adapts to the target repo's stack and conventions; and leaves one commit per phase.
 
 Rather than being only a sequential agent chain, Archer owns the operational layer around OpenCode: repo context attachment, runtime guard rails, permission gates, phase reports, diff tracking, and human-in-the-loop checkpoints.
 
@@ -11,16 +11,15 @@ Archer is written in Bun + TypeScript and uses `@opencode-ai/sdk` to control Ope
 ## The default pipeline
 
 ```
-PRD ──► implementer ──► human-review ──► patterns ──► security ──► design ──► tests ──► adversarial
-         │                                │            │            │          │         │
-         └────────────────────────────────┴────────────┴────────────┴──────────┴─────────┘
-                                                              commit per phase
+PRD ──► implementer ──► patterns ──► security ──► design ──► tests ──► adversarial
+         │               │            │            │          │         │
+         └───────────────┴────────────┴────────────┴──────────┴─────────┘
+                                          commit per phase
 ```
 
 | Step | Agent | Model | What it does |
 |---|---|---|---|
 | `implementer` | `implementer` | `openai/gpt-5.5#xhigh` | Implements the feature respecting repo patterns |
-| `human-review` | — | interactive checkpoint | Runs the app, waits for approval, or hands control to OpenCode for manual iteration |
 | `patterns` | `pattern-auditor` | `openai/gpt-5.5#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
 | `security` | `security-auditor` | `openai/gpt-5.5#xhigh` | Audits and fixes security issues |
 | `design` | `design-polisher` | `anthropic/claude-opus-4-7` | Polishes UI following the repo's design system |
@@ -89,7 +88,7 @@ archer --prompt-file prd.md --model anthropic/claude-sonnet-4-6
 # disable the OpenTUI progress footer
 archer --prompt-file prd.md --no-tui
 
-# disable the post-implementer manual checkpoint
+# drop human-review gates (for pipelines that define them)
 archer --prompt-file prd.md --no-human-review
 
 # configure the app command used during manual review
@@ -337,7 +336,6 @@ Each invocation creates `~/.archer/runs/<run-id>/`:
 ├── metadata.json
 ├── reports/
 │   ├── implementer.md
-│   ├── human-review.md
 │   ├── patterns.md
 │   ├── security.md
 │   ├── design.md

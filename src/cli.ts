@@ -421,7 +421,7 @@ Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all steps (repeatable)
   --pipeline, -p <name>    Pipeline to run; built-in "default" runs
-                           implementer,human-review,patterns,security,design,tests,adversarial
+                           implementer,patterns,security,design,tests,adversarial
   --only <steps>           Run only these pipeline steps
   --skip <steps>           Skip these pipeline steps
   --resume <id>            Resume a previous run by its ID (steps with an existing report are

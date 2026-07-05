@@ -165,7 +165,6 @@ pipelines:
     steps:
       - agent: implementer
         reports: none
-      - human-review
       - patterns
       - security
       - design

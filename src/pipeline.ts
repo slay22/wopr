@@ -98,7 +98,6 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
     description: "Implementation, pattern/security audits, design polish, tests, and adversarial review",
     steps: [
       { agent: "implementer", reports: "none" },
-      humanReviewStep,
       "patterns",
       "security",
       "design",

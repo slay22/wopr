@@ -28,11 +28,11 @@ describe("model shorthand", () => {
 })
 
 describe("default pipeline", () => {
-  test("matches the historical six phases plus the human gate", () => {
+  test("matches the historical six phases", () => {
     const pipeline = defaultPipeline()
 
-    expect(stepNames(pipeline)).toEqual(["implementer", "human-review", "patterns", "security", "design", "tests", "adversarial"])
-    expect(pipeline.steps[1]?.type).toBe("human")
+    expect(stepNames(pipeline)).toEqual(["implementer", "patterns", "security", "design", "tests", "adversarial"])
+    expect(pipeline.steps.some((step) => step.type === "human")).toBe(false)
   })
 
   test("wires inputs by convention exactly like the static pipeline did", () => {

@@ -431,7 +431,6 @@ describe("default config init", () => {
     }
     expect(config.pipelines.default?.steps).toEqual([
       { agent: "implementer", reports: "none" },
-      "human-review",
       "patterns",
       "security",
       "design",
