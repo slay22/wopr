@@ -85,7 +85,7 @@ const feedLimit = 100
 
 // The right-hand content panel is a three-tab view of the focused phase.
 type ContentTab = "logs" | "reports" | "session"
-const contentTabOrder: readonly ContentTab[] = ["logs", "reports", "session"]
+const contentTabOrder: readonly ContentTab[] = ["session", "reports", "logs"]
 
 const permissionChoices: ReadonlyArray<{ reply: PermissionReply; label: string; color: PaletteColor }> = [
   { reply: "once", label: "allow once", color: "green" },
@@ -322,8 +322,8 @@ export class TuiProgress implements ProgressUI {
         this.openActiveSessionWindow("key")
         return
     }
-    // Digit keys jump straight to a content tab (1 logs · 2 reports · 3 session).
-    const digitTab: Record<string, ContentTab> = { "1": "logs", "2": "reports", "3": "session" }
+    // Digit keys jump straight to a content tab (1 session · 2 reports · 3 logs).
+    const digitTab: Record<string, ContentTab> = { "1": "session", "2": "reports", "3": "logs" }
     const jump = digitTab[key.name] ?? digitTab[key.raw ?? ""]
     if (jump) {
       consume()
