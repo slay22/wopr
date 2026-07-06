@@ -1263,16 +1263,21 @@ export class TuiProgress implements ProgressUI {
     // A group / sub-group header: the aggregate status icon, a label, and an
     // `×N` count, carrying the group's aggregate elapsed/cost. `count` is the
     // number of visible branches — distinct steps under a `parallel:` header,
-    // models under a fan-out header — not always the raw member total.
+    // models under a fan-out header — not always the raw member total. When
+    // the focused phase is one of this header's members (directly or via a
+    // nested sub-header), the label picks up the same accent as the focused
+    // leaf so the whole ancestor chain reads as one highlighted path down the
+    // tree, instead of only the leaf itself carrying any indication.
     const emitHeader = (members: PhaseState[], labelText: string, kind: "step" | "parallel", count: number, lasts: boolean[]) => {
       const status = groupStatus(members)
+      const onPath = members.some(isSelected)
       emitLine({
         rowPhase: members[0]!.name,
         lasts,
         icon: statusIcon(status, now),
         labelText,
         labelStatus: status,
-        color: kind === "parallel" ? (text) => fg(theme.teal)(text) : undefined,
+        color: onPath ? (text) => bold(fg(theme.accent)(text)) : kind === "parallel" ? (text) => fg(theme.teal)(text) : undefined,
         suffix: [fg(theme.faint)(` ×${count}`)],
         right: groupMetaChunks(members, now),
       })
