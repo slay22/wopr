@@ -1,13 +1,13 @@
 import { basename } from "node:path"
 
-import { BoxRenderable, StyledText, TextRenderable, bold, createCliRenderer, fg, t } from "@opentui/core"
+import { BoxRenderable, StyledText, TextRenderable, bold, createCliRenderer, decodePasteBytes, fg, stripAnsiSequences, t } from "@opentui/core"
 
 import { buildAgentRegistry, loadMergedArcherConfig } from "./config"
 import { builtInPipelines, defaultPipelineName, resolvePipeline } from "./pipeline"
 import { joinLines, padBetween, paletteForTerminal, plain, raw, setTheme, terminalBackgroundHex, theme, truncate } from "./tui-theme"
 
 import type { ArcherConfig } from "./config"
-import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
+import type { BoxOptions, CliRenderer, KeyEvent, PasteEvent, TextChunk } from "@opentui/core"
 import type { AgentSpec } from "./types"
 import type { PaletteColor } from "./tui-theme"
 
@@ -145,6 +145,8 @@ class LaunchPicker {
   private selected = 0
   private scroll = 0
   private prompt = ""
+  private cursor = 0
+  private promptScroll = 0
   private promptError = ""
   private optionIndex = 0
   private message = ""
@@ -172,6 +174,18 @@ class LaunchPicker {
     if (mode !== "dark" && mode !== "light") return
     setTheme(paletteForTerminal(mode, terminalBackgroundHex(this.renderer)))
     this.applyPalette()
+    this.render()
+  }
+
+  private readonly handlePaste = (event: PasteEvent) => {
+    if (this.mode !== "prompt") return
+    event.preventDefault()
+    event.stopPropagation()
+    const text = sanitizePaste(stripAnsiSequences(decodePasteBytes(event.bytes)))
+    if (!text) return
+    this.prompt = this.prompt.slice(0, this.cursor) + text + this.prompt.slice(this.cursor)
+    this.cursor += text.length
+    this.promptError = ""
     this.render()
   }
 
@@ -292,6 +306,7 @@ class LaunchPicker {
     renderer.root.add(shell)
 
     renderer.keyInput.on("keypress", this.handleKeyPress)
+    renderer.keyInput.on("paste", this.handlePaste)
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
@@ -343,6 +358,7 @@ class LaunchPicker {
         this.promptError = "Write a prompt before continuing."
       } else {
         this.prompt = this.prompt.trim()
+        this.cursor = this.prompt.length
         this.promptError = ""
         this.mode = "options"
         this.optionIndex = 0
@@ -350,22 +366,47 @@ class LaunchPicker {
       this.render()
       return
     }
-    if (key.name === "backspace") {
-      this.prompt = this.prompt.slice(0, -1)
+    if (key.name === "backspace" || (key.ctrl && key.name === "h")) {
+      if (this.cursor > 0) {
+        this.prompt = this.prompt.slice(0, this.cursor - 1) + this.prompt.slice(this.cursor)
+        this.cursor -= 1
+      }
       this.promptError = ""
       this.render()
       return
     }
     if (key.ctrl && key.name === "u") {
       this.prompt = ""
+      this.cursor = 0
       this.promptError = ""
       this.render()
       return
     }
+    if ((key.ctrl && key.name === "a") || key.name === "home") {
+      this.cursor = 0
+      this.render()
+      return
+    }
+    if ((key.ctrl && key.name === "e") || key.name === "end") {
+      this.cursor = this.prompt.length
+      this.render()
+      return
+    }
+    if (key.name === "left") {
+      this.cursor = clamp(this.cursor - 1, 0, this.prompt.length)
+      this.render()
+      return
+    }
+    if (key.name === "right") {
+      this.cursor = clamp(this.cursor + 1, 0, this.prompt.length)
+      this.render()
+      return
+    }
 
-    const char = typedChar(key)
-    if (char !== undefined) {
-      this.prompt += char
+    const text = typedText(key)
+    if (text) {
+      this.prompt = this.prompt.slice(0, this.cursor) + text + this.prompt.slice(this.cursor)
+      this.cursor += text.length
       this.promptError = ""
       this.render()
     }
@@ -393,6 +434,7 @@ class LaunchPicker {
       case "p":
       case "escape":
         this.mode = "prompt"
+        this.cursor = this.prompt.length
         this.render()
         return
       case "q":
@@ -410,6 +452,8 @@ class LaunchPicker {
     }
     this.message = ""
     this.mode = "prompt"
+    this.cursor = this.prompt.length
+    this.promptScroll = 0
     this.render()
   }
 
@@ -456,6 +500,7 @@ class LaunchPicker {
   private finish(selection: LaunchRunSelection | undefined) {
     clearInterval(this.ticker)
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
+    this.renderer.keyInput.off("paste", this.handlePaste)
     this.renderer.off("theme_mode", this.handleThemeMode)
     if (!this.renderer.isDestroyed) this.renderer.destroy()
     this.resolveResult(selection)
@@ -579,21 +624,60 @@ class LaunchPicker {
     const lines: StyledText[] = []
     lines.push(new StyledText([fg(theme.faint)("pipeline "), bold(fg(theme.text)(choice.name))]))
     lines.push(plain(""))
-    lines.push(t`${fg(theme.dim)("Describe what Archer should do. Press Enter to continue.")}`)
+    lines.push(t`${fg(theme.dim)("Describe what Archer should do. Paste freely; Enter continues.")}`)
     lines.push(plain(""))
+
     const fieldWidth = Math.max(10, width - 2)
+    const contentWidth = Math.max(1, fieldWidth - 1)
+    const inputHeight = Math.max(5, Math.min(20, this.listHeight() - 6))
+    const visibleRows = Math.max(1, inputHeight - 2)
+    const wrapped = wrapPromptLines(this.prompt, contentWidth)
+    const { row: cursorRow, col: cursorCol } = cursorPosition(this.prompt, this.cursor, contentWidth)
+
+    if (cursorRow < this.promptScroll) this.promptScroll = cursorRow
+    if (cursorRow >= this.promptScroll + visibleRows) this.promptScroll = cursorRow - visibleRows + 1
+    this.promptScroll = clamp(this.promptScroll, 0, Math.max(0, wrapped.length - visibleRows))
+
+    const start = this.promptScroll
+    const end = Math.min(wrapped.length, start + visibleRows)
     const placeholder = "Add onboarding, fix bug #123, review current diff…"
-    const visiblePrompt = this.prompt ? tail(this.prompt, fieldWidth - 1) : truncate(placeholder, fieldWidth - 1)
-    const chunks: TextChunk[] = [fg(theme.faint)("┌" + "─".repeat(fieldWidth) + "┐")]
-    lines.push(new StyledText(chunks))
-    lines.push(new StyledText([fg(theme.faint)("│"), this.prompt ? fg(theme.text)(visiblePrompt) : fg(theme.faint)(visiblePrompt), fg(theme.accent)("▏"), fg(theme.faint)(" ".repeat(Math.max(0, fieldWidth - visiblePrompt.length - 1)) + "│")]))
+
+    lines.push(new StyledText([fg(theme.faint)("┌" + "─".repeat(fieldWidth) + "┐")]))
+    for (let r = start; r < end; r++) {
+      const seg = wrapped[r] ?? ""
+      const chunks: TextChunk[] = [fg(theme.faint)("│")]
+      if (r === cursorRow) {
+        const before = seg.slice(0, cursorCol)
+        const after = seg.slice(cursorCol)
+        const used = before.length + 1 + after.length
+        if (!this.prompt && r === 0) {
+          chunks.push(fg(theme.accent)("▏"))
+          chunks.push(fg(theme.faint)(truncate(placeholder, Math.max(0, fieldWidth - 1))))
+          chunks.push(fg(theme.faint)(" ".repeat(Math.max(0, fieldWidth - 1 - truncate(placeholder, fieldWidth - 1).length)) + "│"))
+        } else {
+          chunks.push(fg(theme.text)(before))
+          chunks.push(fg(theme.accent)("▏"))
+          chunks.push(fg(theme.text)(after))
+          chunks.push(fg(theme.faint)(" ".repeat(Math.max(0, fieldWidth - used)) + "│"))
+        }
+      } else {
+        chunks.push(fg(this.prompt ? theme.text : theme.faint)(seg))
+        chunks.push(fg(theme.faint)(" ".repeat(Math.max(0, fieldWidth - seg.length)) + "│"))
+      }
+      lines.push(new StyledText(chunks))
+    }
+    for (let r = end; r < start + visibleRows; r++) {
+      lines.push(new StyledText([fg(theme.faint)("│"), fg(theme.faint)(" ".repeat(fieldWidth) + "│")]))
+    }
     lines.push(new StyledText([fg(theme.faint)("└" + "─".repeat(fieldWidth) + "┘")]))
+
     if (this.promptError) {
       lines.push(plain(""))
       lines.push(t`${fg(theme.red)(this.promptError)}`)
     }
     lines.push(plain(""))
-    lines.push(t`${fg(theme.faint)("Esc returns to the pipeline list. Ctrl+U clears the field.")}`)
+    const meta = `${this.prompt.length} char${this.prompt.length === 1 ? "" : "s"}${wrapped.length > 1 ? ` · ${wrapped.length} lines` : ""}`
+    lines.push(new StyledText([fg(theme.faint)("←/→ move · home/end jump · ctrl+U clear · esc back · "), fg(theme.accent)(meta)]))
     return joinLines(lines)
   }
 
@@ -650,7 +734,7 @@ class LaunchPicker {
     }
     if (this.mode === "prompt") {
       return padBetween(
-        [fg(theme.dim)("type prompt · "), fg(theme.accent)("enter"), fg(theme.dim)(" options · "), fg(theme.accent)("esc"), fg(theme.dim)(" back")],
+        [fg(theme.dim)("type/paste · "), fg(theme.accent)("enter"), fg(theme.dim)(" options · "), fg(theme.accent)("esc"), fg(theme.dim)(" back")],
         [fg(theme.faint)(`${this.prompt.length} chars`)],
         width,
       )
@@ -676,14 +760,62 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
-function typedChar(key: KeyEvent): string | undefined {
+function typedText(key: KeyEvent): string | undefined {
   if (key.ctrl) return undefined
-  const raw = key.raw
-  if (typeof raw === "string" && raw.length === 1) {
-    const code = raw.codePointAt(0)!
-    if (code >= 0x20 && code !== 0x7f) return raw
+  const name = key.name
+  if (name === "space") return " "
+  // Accept regular typing (single-char name) or an unrecognized multi-char
+  // raw (plain-text paste from terminals without bracketed-paste support).
+  // Named keys like arrows/delete carry printable-looking escape sequences
+  // in `raw` and must not be inserted as text.
+  if (name !== "" && name.length !== 1) return undefined
+  const rawValue = key.raw
+  if (typeof rawValue !== "string" || rawValue.length === 0) return undefined
+  let out = ""
+  for (const ch of rawValue) {
+    const code = ch.codePointAt(0)!
+    if (code >= 0x20 && code !== 0x7f) out += ch
   }
-  return undefined
+  return out || undefined
+}
+
+function sanitizePaste(text: string): string {
+  // Normalize CR/CRLF to LF and strip stray ANSI/control bytes that some
+  // terminals leak outside bracketed-paste frames.
+  return text.replace(/\r\n?/g, "\n").replace(/[^\S ]/g, "")
+}
+
+function wrapPromptLines(text: string, width: number): string[] {
+  if (width < 1) return [""]
+  const result: string[] = []
+  for (const line of text.split("\n")) {
+    if (line.length === 0) {
+      result.push("")
+      continue
+    }
+    for (let i = 0; i < line.length; i += width) result.push(line.slice(i, i + width))
+  }
+  return result.length ? result : [""]
+}
+
+function cursorPosition(text: string, cursor: number, width: number): { row: number; col: number } {
+  let row = 0
+  let col = 0
+  const end = Math.min(cursor, text.length)
+  for (let i = 0; i < end; i++) {
+    const ch = text[i]!
+    if (ch === "\n") {
+      row += 1
+      col = 0
+      continue
+    }
+    if (col >= width) {
+      row += 1
+      col = 0
+    }
+    col += 1
+  }
+  return { row, col }
 }
 
 function wrapWords(text: string, width: number) {
@@ -704,9 +836,4 @@ function wrapWords(text: string, width: number) {
   }
   if (current) lines.push(current)
   return lines.length ? lines : [""]
-}
-
-function tail(value: string, width: number) {
-  if (value.length <= width) return value
-  return `…${value.slice(-Math.max(1, width - 1))}`
 }
