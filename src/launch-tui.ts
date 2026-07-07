@@ -8,7 +8,7 @@ import { joinLines, padBetween, paletteForTerminal, plain, raw, setTheme, spinne
 
 import type { ArcherConfig } from "./config"
 import type { BoxOptions, CliRenderer, KeyEvent, PasteEvent, TextChunk } from "@opentui/core"
-import type { AgentSpec } from "./types"
+import type { AgentSpec, Step } from "./types"
 import type { PaletteColor } from "./tui-theme"
 
 export type LaunchRunSelection = {
@@ -25,12 +25,26 @@ export type LaunchRunSelection = {
   worktree?: { dir: string; branch: string }
 }
 
+// One resolved step, flattened for the preview: `groupId` ties concurrent
+// steps together (the runner batches same-groupId steps), and `stepName` is
+// the pre-fan-out logical name shared by every `models:` variant. The tree in
+// the detail pane reconstructs phases (groups) → agents (stepNames) → models
+// from this, so it must survive resolution rather than collapse to a name.
+type StepNode = {
+  stepName: string
+  /** Empty for human gates, which never run concurrently. */
+  groupId: string
+  kind: "agent" | "human"
+  /** Short model label (e.g. "claude-opus-4-8"); empty for human gates. */
+  modelLabel: string
+}
+
 type PipelineChoice = {
   name: string
   description: string
   source: "built-in" | "configured"
   isDefault: boolean
-  steps: string[]
+  steps: StepNode[]
   valid: boolean
   error?: string
 }
@@ -132,7 +146,7 @@ function pipelineChoices(config: ArcherConfig | undefined, agents: readonly Agen
         description: spec.description ?? "No description",
         source,
         isDefault: name === defaultName,
-        steps: pipeline.steps.map((step) => step.name),
+        steps: pipeline.steps.map(stepNode),
         valid: true,
       }
     } catch (error) {
@@ -147,6 +161,17 @@ function pipelineChoices(config: ArcherConfig | undefined, agents: readonly Agen
       }
     }
   })
+}
+
+function stepNode(step: Step): StepNode {
+  if (step.type === "human") return { stepName: step.name, groupId: "", kind: "human", modelLabel: "" }
+  return { stepName: step.stepName, groupId: step.groupId, kind: "agent", modelLabel: shortModelLabel(step.model, step.variant) }
+}
+
+/** Drops the provider path from a model id so the tree shows "claude-opus-4-8", not "anthropic/claude-opus-4-8#…". */
+function shortModelLabel(model: string, variant?: string): string {
+  const base = model.slice(model.lastIndexOf("/") + 1)
+  return variant ? `${base} ${variant}` : base
 }
 
 class LaunchPicker {
@@ -749,7 +774,7 @@ class LaunchPicker {
       for (const line of wrapWords(choice.error ?? "unknown error", width)) lines.push(t`${fg(theme.dim)(line)}`)
     } else {
       lines.push(t`${fg(theme.faint)("steps")}`)
-      for (const step of choice.steps) lines.push(new StyledText([fg(theme.accent)("• "), fg(theme.text)(truncate(step, Math.max(8, width - 2)))]))
+      for (const line of stepTree(choice.steps, width)) lines.push(line)
     }
     if (this.message) {
       lines.push(plain(""))
@@ -1001,4 +1026,82 @@ function wrapWords(text: string, width: number) {
   }
   if (current) lines.push(current)
   return lines.length ? lines : [""]
+}
+
+// Renders the resolved steps as a tree that shows the run shape the old flat
+// list hid: sequential phases stack as `○` nodes top-to-bottom, and any phase
+// whose steps run concurrently — a `parallel:` block, or one agent fanned
+// across `models:` — forks into branches. Phases come from `groupId` (same id
+// = one concurrent batch), agents within a phase from `stepName`, and the
+// leaves are the per-model variants.
+export function stepTree(steps: readonly StepNode[], width: number): StyledText[] {
+  type Agent = { stepName: string; models: string[] }
+  type Phase = { kind: "agent" | "human"; groupId: string; agents: Agent[] }
+
+  const phases: Phase[] = []
+  for (const node of steps) {
+    const last = phases[phases.length - 1]
+    // Human gates never batch; each is its own phase. Agent steps join the
+    // current phase only while the groupId holds (contiguous by construction).
+    if (node.kind === "human" || !last || last.kind !== "agent" || last.groupId !== node.groupId) {
+      phases.push({ kind: node.kind, groupId: node.groupId, agents: [{ stepName: node.stepName, models: node.modelLabel ? [node.modelLabel] : [] }] })
+      continue
+    }
+    const agent = last.agents.find((candidate) => candidate.stepName === node.stepName)
+    if (agent) agent.models.push(node.modelLabel)
+    else last.agents.push({ stepName: node.stepName, models: [node.modelLabel] })
+  }
+
+  const lines: StyledText[] = []
+  const fit = (text: string, used: number) => truncate(text, Math.max(6, width - used))
+
+  for (const phase of phases) {
+    if (phase.kind === "human") {
+      lines.push(new StyledText([fg(theme.faint)("○ "), fg(theme.yellow)(fit(phase.agents[0]!.stepName, 2)), fg(theme.faint)("  · manual gate")]))
+      continue
+    }
+    const total = phase.agents.reduce((sum, agent) => sum + agent.models.length, 0)
+
+    // A lone single-model step is just a sequential leaf.
+    if (total === 1) {
+      lines.push(new StyledText([fg(theme.faint)("○ "), fg(theme.text)(fit(phase.agents[0]!.stepName, 2))]))
+      continue
+    }
+
+    // One agent, many models: fan the models out under the step node.
+    if (phase.agents.length === 1) {
+      const agent = phase.agents[0]!
+      const name = fit(agent.stepName, 2)
+      lines.push(new StyledText([fg(theme.faint)("○ "), fg(theme.text)(name), fg(theme.faint)("  · "), fg(theme.faint)(truncate(`${agent.models.length} models`, Math.max(3, width - 6 - name.length)))]))
+      pushModels(lines, agent.models, "  ", width)
+      continue
+    }
+
+    // A parallel block: several agents run concurrently, each maybe fanned.
+    const perAgent = phase.agents[0]!.models.length
+    const uniform = perAgent > 1 && phase.agents.every((agent) => agent.models.length === perAgent)
+    const annotation = uniform ? `${phase.agents.length} agents × ${perAgent} models` : `${phase.agents.length} agents`
+    lines.push(new StyledText([fg(theme.faint)("○ "), fg(theme.text)("parallel"), fg(theme.faint)("  · "), fg(theme.faint)(truncate(annotation, Math.max(3, width - 14)))]))
+    phase.agents.forEach((agent, index) => {
+      const last = index === phase.agents.length - 1
+      const elbow = last ? "└─ " : "├─ "
+      if (agent.models.length === 1) {
+        const stepName = fit(agent.stepName, 5)
+        lines.push(new StyledText([fg(theme.faint)("  " + elbow), fg(theme.text)(stepName), raw("  "), fg(theme.dim)(fit(agent.models[0]!, 7 + stepName.length))]))
+      } else {
+        lines.push(new StyledText([fg(theme.faint)("  " + elbow), fg(theme.text)(fit(agent.stepName, 5))]))
+        pushModels(lines, agent.models, last ? "     " : "  │  ", width)
+      }
+    })
+  }
+  return lines
+}
+
+// Model leaves under a step node; `prefix` carries the ancestor spine so the
+// leaf connectors line up under the parent's branch.
+function pushModels(lines: StyledText[], models: readonly string[], prefix: string, width: number) {
+  models.forEach((model, index) => {
+    const leaf = index === models.length - 1 ? "└ " : "├ "
+    lines.push(new StyledText([fg(theme.faint)(prefix + leaf), fg(theme.dim)(truncate(model, Math.max(6, width - prefix.length - 2)))]))
+  })
 }
