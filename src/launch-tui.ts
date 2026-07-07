@@ -633,7 +633,11 @@ class LaunchPicker {
     this.pipelineBox.width = pipelineWidth
     this.detailBox.width = detailWidth
     this.headerText.content = this.headerContent(innerWidth)
-    this.pipelineText.content = this.pipelineContent(pipelineWidth)
+    // Panels reserve 4 cells of chrome (rounded border + paddingX:1 each side),
+    // so lay out the rows against the inner text width — matching detailWidth
+    // below. Passing the full box width made every right-aligned badge overflow
+    // and wrap onto its own line.
+    this.pipelineText.content = this.pipelineContent(pipelineWidth - 4)
     this.detailText.content = this.detailContent(detailWidth - 4)
     this.footerText.content = this.footerContent(innerWidth)
     this.renderModal()
@@ -703,15 +707,21 @@ class LaunchPicker {
     return joinLines(rows)
   }
 
+  // One row per pipeline: a selection caret, a source/validity dot, the name,
+  // and an optional right-aligned badge. The dot already encodes the source
+  // (● configured · ○ built-in · ! invalid), so the row only spends a badge on
+  // the signal that dot can't carry — the default, and user-defined pipelines.
   private pipelineRow(choice: PipelineChoice, selected: boolean, width: number) {
-    const left: TextChunk[] = [selected ? fg(theme.accent)("▸ ") : raw("  ")]
-    left.push(choice.valid ? fg(choice.source === "configured" ? theme.teal : theme.dim)(choice.source === "configured" ? "●" : "○") : fg(theme.red)("!"))
-    left.push(raw(" "))
-    left.push(selected ? bold(fg(theme.text)(choice.name)) : fg(theme.text)(choice.name))
-    const right: TextChunk[] = []
-    if (choice.isDefault) right.push(fg(theme.green)("default"))
-    else right.push(fg(choice.source === "configured" ? theme.teal : theme.faint)(choice.source))
-    return padBetween(left, right, width)
+    const marker = selected ? fg(theme.accent)("▸ ") : raw("  ")
+    const dot = choice.valid ? fg(choice.source === "configured" ? theme.teal : theme.dim)(choice.source === "configured" ? "●" : "○") : fg(theme.red)("!")
+    const badgeText = choice.isDefault ? "default" : choice.source === "configured" ? "custom" : ""
+    const badge: TextChunk[] = badgeText ? [fg(choice.isDefault ? theme.green : theme.teal)(badgeText)] : []
+    // Prefix is caret (2) + dot (1) + space (1); reserve the badge plus a
+    // 1-cell gap so a long name truncates instead of wrapping into the badge.
+    const nameWidth = Math.max(3, width - 4 - (badgeText ? badgeText.length + 1 : 0))
+    const name = truncate(choice.name, nameWidth)
+    const label = selected ? bold(fg(theme.text)(name)) : fg(theme.text)(name)
+    return padBetween([marker, dot, raw(" "), label], badge, width)
   }
 
   private detailContent(width: number) {
