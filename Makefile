@@ -10,12 +10,12 @@ install: build
 	@mkdir -p $(INSTALL_DIR)
 	@install -m 755 $(BIN) $(INSTALL_DIR)/$(BIN)
 	@bun run src/main.ts init --global --quiet
-	@echo "✓ Instalado en $(INSTALL_DIR)/$(BIN)"
-	@echo "  Asegúrate de que $(INSTALL_DIR) está en tu PATH."
+	@echo "✓ Installed at $(INSTALL_DIR)/$(BIN)"
+	@echo "  Make sure $(INSTALL_DIR) is on your PATH."
 
 uninstall:
 	@rm -f $(INSTALL_DIR)/$(BIN)
-	@echo "✓ Desinstalado $(INSTALL_DIR)/$(BIN)"
+	@echo "✓ Uninstalled $(INSTALL_DIR)/$(BIN)"
 
 clean:
 	@rm -f $(BIN) src/$(BIN)
