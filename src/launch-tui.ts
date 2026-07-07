@@ -676,8 +676,12 @@ class LaunchPicker {
       lines.push(t`${fg(theme.red)(this.promptError)}`)
     }
     lines.push(plain(""))
-    const meta = `${this.prompt.length} char${this.prompt.length === 1 ? "" : "s"}${wrapped.length > 1 ? ` · ${wrapped.length} lines` : ""}`
-    lines.push(new StyledText([fg(theme.faint)("←/→ move · home/end jump · ctrl+U clear · esc back · "), fg(theme.accent)(meta)]))
+    const hint = "←/→ move · home/end jump · ctrl+U clear · esc back"
+    if (wrapped.length > 1) {
+      lines.push(new StyledText([fg(theme.faint)(hint + " · "), fg(theme.accent)(`${wrapped.length} lines`)]))
+    } else {
+      lines.push(t`${fg(theme.faint)(hint)}`)
+    }
     return joinLines(lines)
   }
 
@@ -735,7 +739,7 @@ class LaunchPicker {
     if (this.mode === "prompt") {
       return padBetween(
         [fg(theme.dim)("type/paste · "), fg(theme.accent)("enter"), fg(theme.dim)(" options · "), fg(theme.accent)("esc"), fg(theme.dim)(" back")],
-        [fg(theme.faint)(`${this.prompt.length} chars`)],
+        [fg(theme.faint)(`${this.prompt.length} char${this.prompt.length === 1 ? "" : "s"}`)],
         width,
       )
     }
