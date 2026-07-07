@@ -780,9 +780,15 @@ function typedText(key: KeyEvent): string | undefined {
 }
 
 function sanitizePaste(text: string): string {
-  // Normalize CR/CRLF to LF and strip stray ANSI/control bytes that some
-  // terminals leak outside bracketed-paste frames.
-  return text.replace(/\r\n?/g, "\n").replace(/[^\S ]/g, "")
+  // Normalize CR/CRLF to LF (preserving line breaks), collapse tabs to a
+  // single space so they don't desync the wrap/cursor column math, and
+  // strip any remaining control bytes that some terminals leak outside
+  // bracketed-paste frames (ANSI escapes are already gone via
+  // stripAnsiSequences above).
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
 }
 
 function wrapPromptLines(text: string, width: number): string[] {
