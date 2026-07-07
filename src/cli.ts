@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type ArcherDefaults } from "./config"
+import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
@@ -124,7 +125,8 @@ async function launchInteractiveRun(targetDir: string) {
   if (selection.includeDirty) parsed.maxAttempts = 1
 
   if (selection.worktree) {
-    process.stderr.write(`archer: running in isolated worktree\n  branch: ${selection.worktree.branch}\n  dir: ${selection.worktree.dir}\n`)
+    log.info(`running in isolated worktree (branch: ${selection.worktree.branch})`)
+    log.info(`  dir: ${selection.worktree.dir}`)
   }
 
   await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt })

@@ -111,6 +111,15 @@ export async function restoreRepoSnapshot(snapshot: RepoSnapshot, cwd: string) {
   await execFile("git", ["clean", "-fd"], { cwd })
 }
 
+/**
+ * Creates `<dir>` as a new worktree on a fresh `<branch>` based off `<baseRef>`
+ * (a commit/ref in `cwd`'s repo). Used by the launcher's "isolate in a worktree"
+ * flow so Archer runs against a clean checkout on a new branch.
+ */
+export async function addWorktree(dir: string, branch: string, baseRef: string, cwd: string) {
+  await execFile("git", ["worktree", "add", "-b", branch, dir, baseRef], { cwd })
+}
+
 export async function writeDiff(path: string, baseRef: string, cwd: string) {
   let diff = await execFile("git", ["diff", baseRef], { cwd, allowFailure: true })
   if (diff.exitCode !== 0) {

@@ -3,8 +3,10 @@ import { join } from "node:path"
 
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 
+import { addWorktree } from "./git"
 import { log } from "./log"
 import { startOpencode } from "./opencode"
+import { parseModel } from "./runner"
 import { archerHome } from "./workspace"
 
 export type WorktreeResult = {
@@ -43,7 +45,7 @@ export async function createIsolatedWorktree(input: WorktreeInput): Promise<Work
   const slug = slugifyBranch(branch)
   const dir = join(archerHome(), "worktrees", slug)
   await mkdir(join(archerHome(), "worktrees"), { recursive: true })
-  await runGit(["worktree", "add", "-b", branch, dir, base], input.targetDir)
+  await addWorktree(dir, branch, base, input.targetDir)
   log.info(`created worktree at ${dir} on branch ${branch}`)
   return { dir, branch }
 }
@@ -94,7 +96,7 @@ async function askForBranchName(
       {
         sessionID,
         directory: targetDir,
-        model: splitModel(model),
+        model: parseModel(model),
         system: branchNameSystemPrompt,
         tools: { read: false, write: false, edit: false, bash: false, webfetch: false, todoread: false, todowrite: false },
         parts: [{ type: "text", text: `Prompt:\n${truncate(prompt, 1200)}` }],
@@ -148,13 +150,6 @@ export function slugifyBranch(branch: string): string {
   return slug || `archer-${randomSlug(6)}`
 }
 
-function splitModel(value: string): { providerID: string; modelID: string } {
-  const [providerID, ...rest] = value.split("/")
-  const modelID = rest.join("/")
-  if (!providerID || !modelID) throw new Error(`invalid model: ${value}`)
-  return { providerID, modelID }
-}
-
 function collectText(parts: ReadonlyArray<{ type: string; text?: string }>): string {
   return parts
     .filter((part) => part.type === "text" && typeof part.text === "string")
@@ -173,23 +168,4 @@ function randomSlug(size: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(size))
   for (const byte of bytes) out += chars[byte % chars.length]
   return out
-}
-
-// Reuses git.ts's execFile pattern but stays self-contained so the launcher
-// (which doesn't otherwise touch git.ts) doesn't pull the runner's git helpers.
-async function runGit(args: string[], cwd: string): Promise<void> {
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    env: process.env,
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const stdoutPromise = new Response(proc.stdout).text()
-  const stderrPromise = new Response(proc.stderr).text()
-  const exitCode = await proc.exited
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
-  if (exitCode !== 0) {
-    const output = (stderr || stdout).trim()
-    throw new Error(`git ${args.join(" ")}: ${output || `exit ${exitCode}`}`)
-  }
 }
