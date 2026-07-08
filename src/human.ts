@@ -13,6 +13,12 @@ import type { RunOptions } from "./types"
 import type { Workspace } from "./workspace"
 
 type AppProcess = ChildProcess
+type HumanReviewGateDeps = {
+  openInteractiveOpencodeWindow: typeof openInteractiveOpencodeWindow
+  runInteractiveOpencode: typeof runInteractiveOpencode
+}
+
+const defaultHumanReviewGateDeps: HumanReviewGateDeps = { openInteractiveOpencodeWindow, runInteractiveOpencode }
 
 export async function runHumanReviewGate(
   workspace: Workspace,
@@ -21,6 +27,7 @@ export async function runHumanReviewGate(
   progress: ProgressUI = noopProgress,
   permissions?: PermissionGate,
   stepName = "human-review",
+  deps: HumanReviewGateDeps = defaultHumanReviewGateDeps,
 ) {
   // Human steps are filtered out of new pipelines when --no-human-review is
   // set; this guard covers resumed runs whose frozen pipeline still has one.
@@ -48,18 +55,14 @@ export async function runHumanReviewGate(
   let iterations = 0
   let app: AppProcess | undefined
   const inheritOutput = !askInTui
-  const askAction = async (initial = false) =>
-    askInTui
-      ? askInTui(humanReviewInfo(stepName, options, iterations, app))
-      : askHumanAction(initial ? { timeoutMs: 10_000, timeoutAction: "prepare" } : undefined)
+  const askAction = async () => (askInTui ? askInTui(humanReviewInfo(stepName, options, iterations, app)) : askHumanAction())
 
   // Plain readline fallback still owns the terminal. The TUI path keeps the
   // dashboard active and resolves actions via ProgressUI.askHumanReview.
   if (!askInTui) progress.suspend()
   try {
     log.section(`${stepName} - manual review checkpoint`)
-    if (!askInTui) log.info("choose an action now, or Archer will prepare the configured app command after 10 seconds")
-    let action = await askAction(true)
+    let action = await askAction()
 
     for (;;) {
       if (action === "continue") {
@@ -80,18 +83,28 @@ export async function runHumanReviewGate(
         iterations++
         progress.phaseRunning(stepName, "interactive OpenCode iteration")
         if (askInTui) {
-          await openExternalIteration(options, opencodeUrl, progress, stepName)
-        } else {
-          await stopApp(app)
-          app = undefined
-          // The interactive OpenCode TUI answers its own permission prompts;
-          // Archer's gate must not race it for the same requests.
+          // The external OpenCode TUI owns its own permission prompts. Keep
+          // Archer's dashboard gate paused until the user returns to this gate
+          // and chooses the next action.
           permissions?.pause()
           try {
-            await runInteractiveOpencode(options, opencodeUrl)
+            const opened = await openExternalIteration(options, opencodeUrl, progress, stepName, deps.openInteractiveOpencodeWindow)
+            if (opened) {
+              action = await askAction()
+              continue
+            }
           } finally {
             permissions?.resume()
           }
+
+          await stopApp(app)
+          app = undefined
+          await runSuspendedInteractiveIteration(options, opencodeUrl, progress, stepName, permissions, deps.runInteractiveOpencode)
+          await commitHumanChanges(options)
+        } else {
+          await stopApp(app)
+          app = undefined
+          await runInteractiveIteration(options, opencodeUrl, permissions, deps.runInteractiveOpencode)
           await commitHumanChanges(options)
         }
         action = await askAction()
@@ -173,7 +186,7 @@ function startApp(options: RunOptions, progress: ProgressUI, stepName: string, i
   })
 }
 
-async function askHumanAction(options: { timeoutMs?: number; timeoutAction?: HumanReviewAction } = {}): Promise<HumanReviewAction> {
+async function askHumanAction(): Promise<HumanReviewAction> {
   const rl = createInterface({ input: stdin, output: stdout })
   const controller = new AbortController()
   let interrupted = false
@@ -183,12 +196,10 @@ async function askHumanAction(options: { timeoutMs?: number; timeoutAction?: Hum
     interrupted = true
     controller.abort()
   })
-  const timeout = options.timeoutMs ? setTimeout(() => controller.abort(), options.timeoutMs) : undefined
-  const timeoutHint = options.timeoutMs ? ` (auto-starts in ${Math.round(options.timeoutMs / 1000)}s)` : ""
 
   try {
     for (;;) {
-      const answer = (await rl.question(`Human review: [c]ontinue, [i]terate, [s]tart app, [r]erun app, [a]bort${timeoutHint} > `, {
+      const answer = (await rl.question("Human review: [c]ontinue, [i]terate, [s]tart app, [r]erun app, [a]bort > ", {
         signal: controller.signal,
       }))
         .trim()
@@ -207,30 +218,66 @@ async function askHumanAction(options: { timeoutMs?: number; timeoutAction?: Hum
         log.warn("[human-review] Ctrl+C received; aborting")
         return "abort"
       }
-      if (options.timeoutAction) {
-        log.info("[human-review] no response; preparing configured app command")
-        return options.timeoutAction
-      }
     }
     throw error
   } finally {
-    if (timeout) clearTimeout(timeout)
     rl.close()
   }
 }
 
-async function openExternalIteration(options: RunOptions, opencodeUrl: string, progress: ProgressUI, stepName: string) {
+async function openExternalIteration(
+  options: RunOptions,
+  opencodeUrl: string,
+  progress: ProgressUI,
+  stepName: string,
+  openWindow: typeof openInteractiveOpencodeWindow = openInteractiveOpencodeWindow,
+) {
   progress.phaseActivity(stepName, "opening OpenCode iteration in a new window", "system")
   try {
-    const backend = await openInteractiveOpencodeWindow({
+    const backend = await openWindow({
       url: opencodeUrl,
       targetDir: options.targetDir,
       model: options.interactiveModel,
       variant: options.interactiveVariant,
     })
     progress.phaseActivity(stepName, `OpenCode iteration opened in ${backend}; return here and press c to continue`, "system")
+    return true
   } catch (error) {
     progress.phaseActivity(stepName, `couldn't open OpenCode iteration: ${error instanceof Error ? error.message : String(error)}`, "error")
+    return false
+  }
+}
+
+async function runSuspendedInteractiveIteration(
+  options: RunOptions,
+  opencodeUrl: string,
+  progress: ProgressUI,
+  stepName: string,
+  permissions?: PermissionGate,
+  runInteractive: typeof runInteractiveOpencode = runInteractiveOpencode,
+) {
+  progress.phaseActivity(stepName, "falling back to interactive OpenCode in this terminal", "system")
+  progress.suspend()
+  try {
+    await runInteractiveIteration(options, opencodeUrl, permissions, runInteractive)
+  } finally {
+    progress.resume()
+  }
+}
+
+async function runInteractiveIteration(
+  options: RunOptions,
+  opencodeUrl: string,
+  permissions?: PermissionGate,
+  runInteractive: typeof runInteractiveOpencode = runInteractiveOpencode,
+) {
+  // The interactive OpenCode TUI answers its own permission prompts; Archer's
+  // gate must not race it for the same requests.
+  permissions?.pause()
+  try {
+    await runInteractive(options, opencodeUrl)
+  } finally {
+    permissions?.resume()
   }
 }
 

@@ -52,10 +52,16 @@ async function fixture() {
 }
 
 function progressWithActions(actions: HumanReviewAction[]) {
-  const calls = { suspend: 0, resume: 0, completed: 0, activities: [] as string[], prompts: [] as HumanReviewPromptInfo[] }
+  const calls = {
+    suspend: 0,
+    resume: 0,
+    completed: 0,
+    activities: [] as string[],
+    prompts: [] as HumanReviewPromptInfo[],
+  }
   const progress: ProgressUI = {
     ...noopProgress,
-    suspend: () => void calls.suspend++, 
+    suspend: () => void calls.suspend++,
     resume: () => void calls.resume++,
     phaseCompleted: () => void calls.completed++,
     phaseActivity: (_name, detail) => void calls.activities.push(detail),
@@ -92,5 +98,80 @@ describe("runHumanReviewGate", () => {
     expect(calls.prompts).toHaveLength(2)
     expect(calls.activities).toContain("app launch disabled; start it manually")
     await expect(readFile(join(workspace.dir, "reports", "human-review.md"), "utf8")).resolves.toContain("- Result: approved")
+  })
+
+  test("pauses the permission gate while an external TUI iteration is active", async () => {
+    const { workspace, options } = await fixture()
+    let paused = false
+    const events: string[] = []
+    const { calls, progress } = progressWithActions(["iterate", "continue"])
+    const originalAsk = progress.askHumanReview!
+    const pausedAtPrompt: boolean[] = []
+    progress.askHumanReview = (info) => {
+      pausedAtPrompt.push(paused)
+      return originalAsk(info)
+    }
+
+    await runHumanReviewGate(
+      workspace,
+      options,
+      "http://127.0.0.1:1234",
+      progress,
+      {
+        stop: async () => {},
+        pause: () => {
+          paused = true
+          events.push("pause")
+        },
+        resume: () => {
+          paused = false
+          events.push("resume")
+        },
+      },
+      "human-review",
+      {
+        openInteractiveOpencodeWindow: async () => "terminal",
+        runInteractiveOpencode: async () => {},
+      },
+    )
+
+    expect(events).toEqual(["pause", "resume"])
+    expect(pausedAtPrompt).toEqual([false, true])
+    expect(calls.activities).toContain("OpenCode iteration opened in terminal; return here and press c to continue")
+    await expect(readFile(join(workspace.dir, "reports", "human-review.md"), "utf8")).resolves.toContain("- Manual OpenCode iterations: 1")
+  })
+
+  test("falls back to suspended same-terminal iteration when the TUI window cannot open", async () => {
+    const { workspace, options } = await fixture()
+    const events: string[] = []
+    let interactiveRuns = 0
+    const { calls, progress } = progressWithActions(["iterate", "continue"])
+
+    await runHumanReviewGate(
+      workspace,
+      options,
+      "http://127.0.0.1:1234",
+      progress,
+      {
+        stop: async () => {},
+        pause: () => void events.push("pause"),
+        resume: () => void events.push("resume"),
+      },
+      "human-review",
+      {
+        openInteractiveOpencodeWindow: async () => {
+          throw new Error("unsupported platform")
+        },
+        runInteractiveOpencode: async () => void interactiveRuns++,
+      },
+    )
+
+    expect(interactiveRuns).toBe(1)
+    expect(calls.suspend).toBe(1)
+    expect(calls.resume).toBe(1)
+    expect(events).toEqual(["pause", "resume", "pause", "resume"])
+    expect(calls.activities).toContain("couldn't open OpenCode iteration: unsupported platform")
+    expect(calls.activities).toContain("falling back to interactive OpenCode in this terminal")
+    await expect(readFile(join(workspace.dir, "reports", "human-review.md"), "utf8")).resolves.toContain("- Manual OpenCode iterations: 1")
   })
 })
