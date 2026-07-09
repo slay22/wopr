@@ -49,6 +49,11 @@ describe("worktree branch name helpers", () => {
     expect(cleanBranchName("implementar onboarding en español")).toBe("implementar-onboarding-en-espa-ol")
   })
 
+  test("cleanBranchName reads the last non-empty line so investigation chatter is ignored", () => {
+    expect(cleanBranchName("Looking up DEV-1339…\nThe issue is about push reminders.\n\nadd-push-reminders\n")).toBe("add-push-reminders")
+    expect(cleanBranchName("add-onboarding-flow\n")).toBe("add-onboarding-flow")
+  })
+
   test("cleanBranchName prefixes a leading digit so the name isn't ambiguous", () => {
     expect(cleanBranchName("123 fix login")).toBe("task-123-fix-login")
     expect(cleanBranchName("404-page")).toBe("task-404-page")
@@ -82,7 +87,7 @@ describe("worktree branch name helpers", () => {
 })
 
 describe("askForBranchName", () => {
-  test("asks a tool-less session for a branch name and collects text parts", async () => {
+  test("asks a read-only session for a branch name and collects text parts", async () => {
     let createInput: unknown
     let promptInput: NamerPromptInput | undefined
     const client = fakeNamerClient({
@@ -96,7 +101,7 @@ describe("askForBranchName", () => {
     expect(promptInput?.sessionID).toBe("namer-session")
     expect(promptInput?.directory).toBe("/repo")
     expect(promptInput?.model).toEqual({ providerID: "openai", modelID: "gpt-5.5" })
-    expect(promptInput?.tools).toEqual({ read: false, write: false, edit: false, bash: false, webfetch: false, todoread: false, todowrite: false })
+    expect(promptInput?.tools).toEqual({ read: true, list: true, glob: true, grep: true, webfetch: true, write: false, edit: false, bash: false, todoread: false, todowrite: false })
     expect(promptInput?.parts).toEqual([{ type: "text", text: "Prompt:\nbuild onboarding" }])
   })
 

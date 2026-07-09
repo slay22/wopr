@@ -135,7 +135,9 @@ export async function launchRunTui(options: { targetDir: string }): Promise<Laun
 
   const config = await loadMergedArcherConfig(options.targetDir)
   const choices = pipelineChoices(config, buildAgentRegistry(config))
-  const baseRef = config?.defaults.baseRef ?? "main"
+  // No "main" fallback: a brand-new repo initialized without a baseRef keeps
+  // the user's own init.defaultBranch, and the run auto-detects it afterwards.
+  const baseRef = config?.defaults.baseRef
 
   // No backgroundColor yet: the palette is only chosen after the terminal
   // answers the background query, so a light terminal never flashes dark.
@@ -147,7 +149,7 @@ export async function launchRunTui(options: { targetDir: string }): Promise<Laun
   })
   const mode = await renderer.waitForThemeMode(1_000).catch(() => null)
   setTheme(paletteForTerminal(mode, terminalBackgroundHex(renderer)))
-  return new LaunchPicker(renderer, options.targetDir, choices, baseRef).result
+  return new LaunchPicker(renderer, options.targetDir, choices, baseRef, config?.defaults.branchNameModel).result
 }
 
 function pipelineChoices(config: ArcherConfig | undefined, agents: readonly AgentSpec[]): PipelineChoice[] {
@@ -310,7 +312,8 @@ class LaunchPicker {
     private readonly renderer: CliRenderer,
     private readonly targetDir: string,
     private readonly choices: PipelineChoice[],
-    private readonly baseRef: string,
+    private readonly baseRef: string | undefined,
+    private readonly branchNameModel: string | undefined,
   ) {
     const defaultIndex = choices.findIndex((choice) => choice.isDefault)
     this.selected = defaultIndex >= 0 ? defaultIndex : 0
@@ -675,13 +678,20 @@ class LaunchPicker {
   // loading modal so the user can't toggle options mid-creation. Any failure
   // falls back to the options screen with an explanatory message modal.
   private async startWorktreeRun(pipelineName: string) {
-    this.modal = { kind: "loading", title: "isolating worktree", message: "generating a branch name…", footer: "creating a new branch + worktree…" }
-    this.render()
     try {
-      const { createIsolatedWorktree } = await import("./worktree")
+      const { createIsolatedWorktree, defaultBranchNameModel } = await import("./worktree")
+      const namerModel = this.branchNameModel ?? defaultBranchNameModel
+      this.modal = {
+        kind: "loading",
+        title: "isolating worktree",
+        message: `investigating prompt & naming branch… (${namerModel})`,
+        footer: "creating a new branch + worktree…",
+      }
+      this.render()
       const result = await createIsolatedWorktree({
         targetDir: this.targetDir,
         prompt: this.prompt,
+        model: namerModel,
       })
       this.finish({
         targetDir: result.dir,

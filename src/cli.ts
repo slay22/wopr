@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type ArcherDefaults } from "./config"
+import { detectBaseRef } from "./git"
 import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
@@ -33,6 +34,13 @@ export type ParsedArgs = {
   interactiveVariant?: string
   maxAttempts?: number
   baseRef?: string
+  /**
+   * Repo to auto-detect the base ref in when it differs from targetDir. TUI
+   * worktree runs point targetDir at the fresh worktree, whose checked-out
+   * branch is the new agent branch — the current-branch fallback must look at
+   * the original repo instead.
+   */
+  baseDetectionDir?: string
   targetDir: string
   includeDirty?: boolean
   yolo?: boolean
@@ -101,6 +109,7 @@ async function launchInteractiveRun(targetDir: string) {
 
   const parsed = parseArgs([])
   parsed.targetDir = selection.targetDir
+  parsed.baseDetectionDir = targetDir
   parsed.prompt = selection.prompt
   parsed.pipeline = selection.pipeline
   parsed.humanReview = selection.humanReview
@@ -295,7 +304,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     interactiveModel: interactive.model,
     interactiveVariant: interactive.variant,
     maxAttempts: parsed.maxAttempts ?? defaults.maxAttempts ?? 2,
-    baseRef: parsed.baseRef ?? defaults.baseRef ?? "main",
+    baseRef: await resolveBaseRef(parsed, defaults),
     targetDir: parsed.targetDir,
     includeDirty: parsed.includeDirty ?? false,
     yolo: parsed.yolo ?? false,
@@ -312,6 +321,17 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
   if (!options.resumeRunID) validateStepFilters(pipeline, options)
 
   return options
+}
+
+// Base source: flag > config defaults.baseRef > auto-detection (never persisted).
+// An explicit base that doesn't exist stays a hard error in ensureRepoReady.
+async function resolveBaseRef(parsed: ParsedArgs, defaults: ArcherDefaults): Promise<string> {
+  const explicit = parsed.baseRef ?? defaults.baseRef
+  if (explicit) return explicit
+  const detected = await detectBaseRef(parsed.baseDetectionDir ?? parsed.targetDir)
+  if (!detected) return "HEAD" // non-repo / zero commits: ensureRepoReady reports the real problem
+  log.info(`base ref: ${detected.ref} (auto-detected)`)
+  return detected.ref
 }
 
 // Model source: flag > config defaults.interactiveModel > built-in default.
@@ -510,7 +530,7 @@ Flags:
   --interactive-model <m>  Model used by manual OpenCode iterations (default: ${defaultGptModel}#${defaultGptVariant})
   --interactive-variant <v> Model variant for manual iterations
   --max-attempts <n>       Attempts per step before failing (default: 2)
-  --base <ref>             Branch/base for calculating diffs (default: main)
+  --base <ref>             Branch/base for calculating diffs (default: auto-detected — origin's default branch, else main/master/develop/trunk, else the current branch)
   --dir <path>             Target repo (default: cwd)
 
 Config files:
@@ -519,7 +539,7 @@ Config files:
   agents/*.md              Markdown prompts loaded by matching the agent name
 
 Config keys:
-  defaults:                model, maxAttempts, baseRef, pipeline, appRunCommand, emulator, interactiveModel
+  defaults:                model, maxAttempts, baseRef, pipeline, appRunCommand, emulator, interactiveModel, autoAcceptJudgeModel, branchNameModel
   agents:                  project agents or built-in overrides; prompts live at agents/<name>.md
   pipelines:               named step lists mixing agents and human gates
   permissions:             allow/deny additions to the bash policy (deny always wins)

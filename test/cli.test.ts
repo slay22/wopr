@@ -4,7 +4,8 @@ import { join } from "node:path"
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { parseAndRun, parseArgs, parseCommand } from "../src/cli"
+import { parseAndRun, parseArgs, parseCommand, resolveRunOptions } from "../src/cli"
+import { addWorktree } from "../src/git"
 import { stepNames } from "../src/pipeline"
 
 const homeDirs: string[] = []
@@ -231,6 +232,72 @@ describe("config precedence", () => {
     await expect(parseCommand(["--dir", dir, "--pipeline", "ghost", "prompt"])).rejects.toThrow(
       'unknown pipeline "ghost" (available: implement, implement-lite, quick, refine, review, ultra-implement, ultra-refine)',
     )
+  })
+})
+
+describe("base ref auto-detection", () => {
+  const dirs: string[] = []
+
+  afterAll(async () => {
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  async function git(args: string[], cwd: string) {
+    const proc = Bun.spawn(["git", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "archer-test",
+        GIT_AUTHOR_EMAIL: "archer-test@example.invalid",
+        GIT_COMMITTER_NAME: "archer-test",
+        GIT_COMMITTER_EMAIL: "archer-test@example.invalid",
+      },
+    })
+    if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`)
+  }
+
+  async function repoOn(branch: string) {
+    const dir = await mkdtemp(join(tmpdir(), "archer-cli-base-"))
+    dirs.push(dir)
+    await git(["init", "-q", "-b", branch], dir)
+    await git(["commit", "-q", "--allow-empty", "-m", "init"], dir)
+    return dir
+  }
+
+  test("auto-detects the base ref when flag and config are absent", async () => {
+    const dir = await repoOn("develop")
+    const command = await parseCommand(["--dir", dir, "prompt"])
+
+    expect(command.type).toBe("run")
+    if (command.type !== "run") return
+    expect(command.options.baseRef).toBe("develop")
+  })
+
+  test("falls back to HEAD outside a git repository", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "archer-cli-base-"))
+    dirs.push(dir)
+    const command = await parseCommand(["--dir", dir, "prompt"])
+
+    expect(command.type).toBe("run")
+    if (command.type !== "run") return
+    expect(command.options.baseRef).toBe("HEAD")
+  })
+
+  test("worktree runs detect against the original repo, not the worktree", async () => {
+    const repo = await repoOn("squad-x")
+    const worktree = await mkdtemp(join(tmpdir(), "archer-cli-base-wt-"))
+    await rm(worktree, { recursive: true, force: true })
+    dirs.push(worktree)
+    await addWorktree(worktree, "agent-branch", "HEAD", repo)
+
+    const parsed = parseArgs(["prompt"])
+    parsed.targetDir = worktree
+    parsed.baseDetectionDir = repo
+
+    const options = await resolveRunOptions(parsed)
+    expect(options.baseRef).toBe("squad-x")
   })
 })
 

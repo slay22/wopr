@@ -48,7 +48,13 @@ export async function ensureRepoReady(cwd: string, options: { includeDirty?: boo
   if (options.baseRef) {
     const base = await execFile("git", ["rev-parse", "--verify", "--quiet", `${options.baseRef}^{commit}`], { cwd, allowFailure: true })
     if (base.exitCode !== 0) {
-      throw new Error(`base ref "${options.baseRef}" doesn't exist in this repo; pass --base <ref> (e.g. --base master)`)
+      const head = await execFile("git", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd, allowFailure: true })
+      if (head.exitCode !== 0) {
+        throw new Error(`repository at ${cwd} has no commits yet; create an initial commit first`)
+      }
+      throw new Error(
+        `base ref "${options.baseRef}" doesn't exist in this repo; pass a --base <ref> that exists (e.g. --base master), or drop --base / defaults.baseRef to let archer auto-detect the base branch`,
+      )
     }
   }
 
@@ -65,6 +71,48 @@ export async function ensureRepoReady(cwd: string, options: { includeDirty?: boo
     }
     log.warn("working tree is not clean; --include-dirty will include those changes in the first commit of the pipeline")
   }
+}
+
+export type BaseRefDetection = {
+  ref: string
+  source: "origin-head" | "probe" | "current-branch"
+}
+
+/**
+ * Best-effort detection of the branch to diff against when neither --base nor
+ * defaults.baseRef is set: the remote's default branch (origin/HEAD), then
+ * common base names, then whatever is checked out. Never throws; undefined
+ * when nothing resolves to a commit (not a repo, or a repo with no commits).
+ */
+export async function detectBaseRef(cwd: string): Promise<BaseRefDetection | undefined> {
+  const commitExists = async (ref: string) => {
+    const result = await execFile("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, allowFailure: true })
+    return result.exitCode === 0
+  }
+
+  const originHead = await execFile("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd, allowFailure: true })
+  if (originHead.exitCode === 0) {
+    const remoteBranch = originHead.stdout.trim()
+    // Branch names may contain "/", so strip the known prefix instead of splitting.
+    const localName = remoteBranch.startsWith("origin/") ? remoteBranch.slice("origin/".length) : remoteBranch
+    if (localName && (await commitExists(localName))) return { ref: localName, source: "origin-head" }
+    // No local checkout of the default branch: the remote-tracking ref still
+    // works as a diff base. An origin/HEAD left pointing at a deleted branch
+    // fails both checks and falls through.
+    if (await commitExists(remoteBranch)) return { ref: remoteBranch, source: "origin-head" }
+  }
+
+  for (const name of ["main", "master", "develop", "trunk"]) {
+    if (await commitExists(name)) return { ref: name, source: "probe" }
+  }
+
+  const current = await execFile("git", ["branch", "--show-current"], { cwd, allowFailure: true })
+  const branch = current.stdout.trim()
+  // An unborn branch (zero-commit repo) prints a name that has no commit yet.
+  if (branch && (await commitExists(branch))) return { ref: branch, source: "current-branch" }
+  if (await commitExists("HEAD")) return { ref: "HEAD", source: "current-branch" }
+
+  return undefined
 }
 
 export async function repoBootstrapStatus(cwd: string): Promise<RepoBootstrapStatus> {

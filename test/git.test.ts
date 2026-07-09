@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { addWorktree, ensureRepoReady, findSuspiciousStagedFiles, initializeRepoWithInitialCommit, repoBootstrapStatus } from "../src/git"
+import { addWorktree, detectBaseRef, ensureRepoReady, findSuspiciousStagedFiles, initializeRepoWithInitialCommit, repoBootstrapStatus } from "../src/git"
 
 describe("findSuspiciousStagedFiles", () => {
   test("flags common secret filenames", () => {
@@ -61,20 +61,36 @@ describe("ensureRepoReady", () => {
   })
 
   async function git(args: string[], cwd: string) {
-    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", env: process.env })
+    const proc = Bun.spawn(["git", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "archer-test",
+        GIT_AUTHOR_EMAIL: "archer-test@example.invalid",
+        GIT_COMMITTER_NAME: "archer-test",
+        GIT_COMMITTER_EMAIL: "archer-test@example.invalid",
+      },
+    })
     if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`)
   }
 
-  async function dirtyRepo(): Promise<string> {
+  async function emptyRepo(): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), "archer-ensure-repo-"))
     dirs.push(dir)
     await git(["init", "-q"], dir)
-    await writeFile(join(dir, "dirty.txt"), "uncommitted\n")
     // git reports the physical path; ensureRepoReady resolves symlinks too, but
     // mkdtemp on macOS hands back a /var → /private/var symlink, so compare from there.
     const proc = Bun.spawn(["git", "-C", dir, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" })
     await proc.exited
     return (await new Response(proc.stdout).text()).trim()
+  }
+
+  async function dirtyRepo(): Promise<string> {
+    const dir = await emptyRepo()
+    await writeFile(join(dir, "dirty.txt"), "uncommitted\n")
+    return dir
   }
 
   test("throws on a dirty tree without allowDirty", async () => {
@@ -85,6 +101,108 @@ describe("ensureRepoReady", () => {
   test("allowDirty defers the dirty-tree decision so resume can recover", async () => {
     const dir = await dirtyRepo()
     await expect(ensureRepoReady(dir, { allowDirty: true })).resolves.toBeUndefined()
+  })
+
+  test("rejects an explicit base ref that doesn't exist, pointing at auto-detection", async () => {
+    const dir = await emptyRepo()
+    await git(["commit", "-q", "--allow-empty", "-m", "init"], dir)
+    await expect(ensureRepoReady(dir, { baseRef: "nope" })).rejects.toThrow(/auto-detect/)
+  })
+
+  test("reports a repo with no commits instead of blaming the base ref", async () => {
+    const dir = await emptyRepo()
+    await expect(ensureRepoReady(dir, { baseRef: "main" })).rejects.toThrow(/no commits/)
+  })
+})
+
+describe("detectBaseRef", () => {
+  const dirs: string[] = []
+  afterAll(async () => {
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  async function git(args: string[], cwd: string) {
+    const proc = Bun.spawn(["git", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "archer-test",
+        GIT_AUTHOR_EMAIL: "archer-test@example.invalid",
+        GIT_COMMITTER_NAME: "archer-test",
+        GIT_COMMITTER_EMAIL: "archer-test@example.invalid",
+      },
+    })
+    if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`)
+  }
+
+  async function repo(branch: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "archer-detect-base-"))
+    dirs.push(dir)
+    await git(["init", "-q", "-b", branch], dir)
+    await git(["commit", "-q", "--allow-empty", "-m", "init"], dir)
+    return dir
+  }
+
+  /** Points origin/HEAD at a fabricated remote-tracking branch, no network involved. */
+  async function setOriginHead(dir: string, branch: string, options: { createRef?: boolean } = {}) {
+    if (options.createRef !== false) await git(["update-ref", `refs/remotes/origin/${branch}`, "HEAD"], dir)
+    await git(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`], dir)
+  }
+
+  test("origin/HEAD wins over the probe order", async () => {
+    const dir = await repo("develop")
+    await git(["branch", "main"], dir) // decoy: the probe alone would pick main
+    await setOriginHead(dir, "develop")
+    expect(await detectBaseRef(dir)).toEqual({ ref: "develop", source: "origin-head" })
+  })
+
+  test("uses the remote-tracking ref when the default branch has no local checkout", async () => {
+    const dir = await repo("main")
+    await setOriginHead(dir, "develop")
+    expect(await detectBaseRef(dir)).toEqual({ ref: "origin/develop", source: "origin-head" })
+  })
+
+  test("ignores an origin/HEAD that points at a deleted branch", async () => {
+    const dir = await repo("main")
+    await setOriginHead(dir, "gone", { createRef: false })
+    expect(await detectBaseRef(dir)).toEqual({ ref: "main", source: "probe" })
+  })
+
+  test("probes common base names in order", async () => {
+    const dir = await repo("master")
+    await git(["branch", "develop"], dir)
+    expect(await detectBaseRef(dir)).toEqual({ ref: "master", source: "probe" })
+  })
+
+  test("probe finds develop when it is the only common name", async () => {
+    const dir = await repo("develop")
+    expect(await detectBaseRef(dir)).toEqual({ ref: "develop", source: "probe" })
+  })
+
+  test("falls back to the current branch for exotic names", async () => {
+    const dir = await repo("dev-trunk")
+    expect(await detectBaseRef(dir)).toEqual({ ref: "dev-trunk", source: "current-branch" })
+  })
+
+  test("falls back to HEAD when detached", async () => {
+    const dir = await repo("dev-trunk")
+    await git(["checkout", "-q", "--detach"], dir)
+    expect(await detectBaseRef(dir)).toEqual({ ref: "HEAD", source: "current-branch" })
+  })
+
+  test("returns undefined for a repo with no commits", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "archer-detect-base-"))
+    dirs.push(dir)
+    await git(["init", "-q"], dir)
+    expect(await detectBaseRef(dir)).toBeUndefined()
+  })
+
+  test("returns undefined outside a git repository", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "archer-detect-base-"))
+    dirs.push(dir)
+    expect(await detectBaseRef(dir)).toBeUndefined()
   })
 })
 

@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { Config, OpencodeClient } from "@opencode-ai/sdk/v2"
 
 import { addWorktree } from "./git"
 import { log } from "./log"
@@ -29,8 +29,32 @@ export type WorktreeInput = {
 /** Cheap, fast model used to synthesize a branch name from the prompt. */
 export const defaultBranchNameModel = "anthropic/claude-haiku-4-5"
 
-const branchNameTimeoutMs = 30_000
+// Generous enough for the namer to look up a referenced issue before answering;
+// the deterministic fallback still guards the whole thing.
+const branchNameTimeoutMs = 60_000
 const maxBranchNameLength = 40
+
+/**
+ * Read-only permission set for the naming session, mirroring the read-only
+ * agent shape in agents.ts. MCP tools from the user's opencode setup are left
+ * untouched so issue trackers (Linear, GitHub) stay reachable.
+ */
+function namerOpencodeConfig(): Config {
+  return {
+    permission: {
+      read: "allow",
+      list: "allow",
+      glob: "allow",
+      grep: "allow",
+      webfetch: "allow",
+      edit: "deny",
+      bash: "deny",
+      task: "deny",
+      question: "deny",
+      websearch: "deny",
+    },
+  }
+}
 
 /**
  * Creates a new git branch checked out in a dedicated worktree under
@@ -51,9 +75,10 @@ export async function createIsolatedWorktree(input: WorktreeInput): Promise<Work
 }
 
 /**
- * Asks a cheap, tool-less model for a short kebab-case branch name derived
- * from the prompt. Any failure (no auth, timeout, unparseable reply) falls
- * back to a deterministic slug so the worktree is always created.
+ * Asks a cheap, read-only model for a short kebab-case branch name derived
+ * from the prompt — it may look up referenced issues/tickets first. Any
+ * failure (no auth, timeout, unparseable reply) falls back to a deterministic
+ * slug so the worktree is always created.
  */
 export async function generateBranchName(
   prompt: string,
@@ -64,7 +89,7 @@ export async function generateBranchName(
   const trimmed = prompt.trim()
   if (!trimmed) return fallbackBranchName()
   try {
-    const handle = await startOpencode({}, AbortSignal.timeout(branchNameTimeoutMs))
+    const handle = await startOpencode(namerOpencodeConfig(), AbortSignal.timeout(branchNameTimeoutMs))
     try {
       const name = await askForBranchName(handle.client, trimmed, targetDir, model, signal)
       const cleaned = cleanBranchName(name)
@@ -98,7 +123,7 @@ export async function askForBranchName(
         directory: targetDir,
         model: parseModel(model),
         system: branchNameSystemPrompt,
-        tools: { read: false, write: false, edit: false, bash: false, webfetch: false, todoread: false, todowrite: false },
+        tools: { read: true, list: true, glob: true, grep: true, webfetch: true, write: false, edit: false, bash: false, todoread: false, todowrite: false },
         parts: [{ type: "text", text: `Prompt:\n${truncate(prompt, 1200)}` }],
       },
       { signal: signal ?? undefined },
@@ -119,11 +144,24 @@ const branchNameSystemPrompt = [
   "branch name that captures what the work does. 2-5 words. No leading 'feature/', no quotes,",
   "no punctuation except hyphens, no explanation, no markdown. Examples:",
   "add-onboarding-flow, fix-login-redirect, refactor-config-tui, dark-mode-toggle.",
+  "If the prompt references an issue, ticket, or PR (#123, ABC-123, a URL) instead of describing",
+  "the work, first look it up with the tools available to you (issue-tracker tools, webfetch,",
+  "repo files) and name the branch after what the issue is actually about. If the reference",
+  "can't be resolved, use the issue ID itself as the name (e.g. dev-1339) — never transcribe",
+  "the sentence around it. The last line of your reply must be the branch name alone.",
 ].join("\n")
 
-/** Keeps the model's reply within git's branch-name rules: lowercase, kebab-case, <=40 chars. */
+/**
+ * Keeps the model's reply within git's branch-name rules: lowercase,
+ * kebab-case, <=40 chars. Reads the last non-empty line — a namer that
+ * investigated an issue first may narrate before answering.
+ */
 export function cleanBranchName(raw: string): string {
-  const line = raw.split("\n")[0] ?? ""
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const line = lines[lines.length - 1] ?? ""
   const kebab = line
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

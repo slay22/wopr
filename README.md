@@ -160,7 +160,8 @@ archer --prompt-file prd.md --smart --smart-model anthropic/claude-haiku-4-5
 archer --prompt-file prd.md --keep-run-dir
 
 # change the base branch used to calculate diffs between phases
-# (the ref is validated at startup; repos without a local main need this)
+# (when omitted, archer auto-detects it: origin's default branch, else
+# main/master/develop/trunk, else the current branch)
 archer --prompt-file prd.md --base develop
 
 # include existing local changes in the first commit of the pipeline
@@ -219,12 +220,13 @@ version: 1
 defaults:
   model: openai/gpt-5.5#xhigh     # provider/model[#variant], used by steps with no model of their own
   maxAttempts: 2
-  baseRef: main
+  baseRef: main                    # optional; auto-detected when unset (origin default branch, else main/master/develop/trunk, else current branch)
   pipeline: quick                  # pipeline used when -p/--pipeline is not given
   appRunCommand: pnpm dev          # app command for human gates
   emulator: Pixel_8                # optional Flutter emulator for human gates
   interactiveModel: openai/gpt-5.5#xhigh
   autoAcceptJudgeModel: anthropic/claude-haiku-4-5   # model for smart auto-accept (--smart); defaults to the run's model
+  branchNameModel: anthropic/claude-haiku-4-5        # model that names worktree branches (may look up referenced issues)
 
 # Project agents: the prompt lives at .archer/agents/<name>.md (required).
 # Naming a built-in agent here overrides its model/temperature/readOnly instead.
@@ -321,7 +323,7 @@ Both files are merged before a run, with the project winning: `defaults`, `agent
 `archer config` opens a TUI to view and edit both configs without hand-editing YAML — two tabs, **Global** (`~/.archer/config.yaml`) and **Project** (the current repo's `.archer/config.yaml`):
 
 - Pick models from an autocompleting list: it queries OpenCode for the models your enabled providers expose (including reasoning variants like `#xhigh`), falling back to the full [models.dev](https://models.dev) catalog when OpenCode can't answer, and always accepts a free-typed `provider/model[#variant]`.
-- Edit `defaults` (model, interactiveModel, autoAcceptJudgeModel, maxAttempts, baseRef, pipeline, app command, emulator) and each agent's model/temperature override. Agent `readOnly` is displayed when set; edit it in YAML.
+- Edit `defaults` (model, interactiveModel, autoAcceptJudgeModel, branchNameModel, maxAttempts, baseRef, pipeline, app command, emulator) and each agent's model/temperature override. Agent `readOnly` is displayed when set; edit it in YAML.
 - Browse pipelines and their steps; add, delete, reorder steps, set a per-step model or max-attempts, and add new pipelines. Permissions, hooks, and attachments are shown read-only (edit those in the YAML).
 - When a tab has no file yet, `initialize` writes a starter config (the built-in `implement` pipeline, expanded and ready to edit).
 

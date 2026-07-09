@@ -65,6 +65,7 @@ describe("config loading", () => {
         "  maxAttempts: 3",
         "  baseRef: develop",
         "  pipeline: quick",
+        "  branchNameModel: anthropic/claude-haiku-4-5",
         "agents:",
         "  api-reviewer:",
         "    description: Reviews API consistency",
@@ -108,7 +109,13 @@ describe("config loading", () => {
       dir,
     )
 
-    expect(config.defaults).toEqual({ model: "openai/gpt-5.5#xhigh", maxAttempts: 3, baseRef: "develop", pipeline: "quick" })
+    expect(config.defaults).toEqual({
+      model: "openai/gpt-5.5#xhigh",
+      maxAttempts: 3,
+      baseRef: "develop",
+      pipeline: "quick",
+      branchNameModel: "anthropic/claude-haiku-4-5",
+    })
     expect(config.agents["api-reviewer"]).toEqual({
       description: "Reviews API consistency",
       model: "anthropic/claude-opus-4-7",
@@ -367,9 +374,14 @@ describe("isValidModelString", () => {
 
 describe("config merging", () => {
   test("defaults merge shallow by key; project wins", () => {
-    const global = parse("defaults:\n  model: openai/gpt-5.5#xhigh\n  maxAttempts: 9")
-    const project = parse("defaults:\n  maxAttempts: 2\n  baseRef: dev")
-    expect(mergeArcherConfigs(global, project)?.defaults).toEqual({ model: "openai/gpt-5.5#xhigh", maxAttempts: 2, baseRef: "dev" })
+    const global = parse("defaults:\n  model: openai/gpt-5.5#xhigh\n  maxAttempts: 9\n  branchNameModel: anthropic/claude-haiku-4-5")
+    const project = parse("defaults:\n  maxAttempts: 2\n  baseRef: dev\n  branchNameModel: openai/gpt-5.5-mini")
+    expect(mergeArcherConfigs(global, project)?.defaults).toEqual({
+      model: "openai/gpt-5.5#xhigh",
+      maxAttempts: 2,
+      baseRef: "dev",
+      branchNameModel: "openai/gpt-5.5-mini",
+    })
   })
 
   test("agents and pipelines merge by name; project entry wins wholesale", () => {

@@ -49,6 +49,8 @@ export type ArcherDefaults = {
   interactiveModel?: string
   /** Model for the smart auto-accept judge; falls back to the run's model when unset. */
   autoAcceptJudgeModel?: string
+  /** Model that names worktree branches; falls back to the built-in cheap default when unset. */
+  branchNameModel?: string
 }
 
 /** A project agent definition, or model/temperature/readOnly overrides for a built-in one. */
@@ -166,9 +168,10 @@ version: 1
 defaults:
   # model: openai/gpt-5.5#xhigh # optional: uncomment to force every agent unless a step/agent overrides it
   # maxAttempts: 2
-  # baseRef: main
+  # baseRef: main # optional: when unset, archer auto-detects (origin default branch, else main/master/develop/trunk, else current branch)
   # pipeline: implement
   # interactiveModel: openai/gpt-5.5#xhigh
+  # branchNameModel: anthropic/claude-haiku-4-5 # optional: model that names worktree branches
   # appRunCommand: pnpm dev # optional: unset by default; used during human steps
   # emulator: Pixel_8 # optional: unset by default; used during human steps
 
@@ -343,7 +346,7 @@ export function parseArcherConfig(body: string, source: string, targetDir: strin
 
 function validateDefaults(v: Validator, raw: unknown): ArcherDefaults {
   const record = v.record(raw, "defaults")
-  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "appRunCommand", "emulator", "interactiveModel", "autoAcceptJudgeModel"])
+  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "appRunCommand", "emulator", "interactiveModel", "autoAcceptJudgeModel", "branchNameModel"])
 
   const defaults: ArcherDefaults = {}
   if (record.model !== undefined) defaults.model = v.model(record.model, "defaults.model")
@@ -354,6 +357,7 @@ function validateDefaults(v: Validator, raw: unknown): ArcherDefaults {
   if (record.emulator !== undefined) defaults.emulator = v.nonEmptyString(record.emulator, "defaults.emulator")
   if (record.interactiveModel !== undefined) defaults.interactiveModel = v.model(record.interactiveModel, "defaults.interactiveModel")
   if (record.autoAcceptJudgeModel !== undefined) defaults.autoAcceptJudgeModel = v.model(record.autoAcceptJudgeModel, "defaults.autoAcceptJudgeModel")
+  if (record.branchNameModel !== undefined) defaults.branchNameModel = v.model(record.branchNameModel, "defaults.branchNameModel")
   return defaults
 }
 
