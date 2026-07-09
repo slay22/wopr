@@ -111,7 +111,7 @@ const toggles: readonly ToggleSpec[] = [
   {
     key: "keepRunDir",
     label: "Keep run directory",
-    flag: "--keep-run-dir",
+    flag: "--keep-run-dir / --no-keep-run-dir",
     description: "Preserve the run workspace under ~/.archer/runs after the run finishes.",
   },
   {
@@ -229,7 +229,7 @@ class LaunchPicker {
     yolo: false,
     humanReview: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     includeDirty: false,
-    keepRunDir: false,
+    keepRunDir: true,
     tui: Boolean(process.stdout.isTTY && process.stderr.isTTY),
     worktree: true,
   }
@@ -1014,7 +1014,7 @@ class LaunchPicker {
     if (this.toggleState.yolo) flags.push("--yolo")
     flags.push(this.toggleState.humanReview ? "--human-step" : "--no-human-step")
     if (this.toggleState.includeDirty) flags.push("--include-dirty", "--max-attempts 1")
-    if (this.toggleState.keepRunDir) flags.push("--keep-run-dir")
+    if (!this.toggleState.keepRunDir) flags.push("--no-keep-run-dir")
     flags.push(this.toggleState.tui ? "--tui" : "--no-tui")
     if (this.toggleState.worktree) flags.push("--worktree")
     return flags

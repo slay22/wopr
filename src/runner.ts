@@ -412,8 +412,10 @@ export async function run(options: RunOptions) {
     progress.stop()
     shutdown.dispose()
 
-    if (runErr || options.keepRunDir) {
+    if (runErr) {
       log.warn(`Run dir preserved at ${workspace.dir}`)
+    } else if (options.keepRunDir) {
+      log.info(`Run dir kept at ${workspace.dir}`)
     } else {
       await cleanupWorkspace(workspace).catch((error) => log.warn(`couldn't clean ${workspace.dir}: ${String(error)}`))
     }

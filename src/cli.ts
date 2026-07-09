@@ -290,7 +290,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     onlySteps: parsed.onlySteps,
     skipSteps: parsed.skipSteps,
     resumeRunID: parsed.resumeRunID ?? "",
-    keepRunDir: parsed.keepRunDir ?? false,
+    keepRunDir: parsed.keepRunDir ?? true,
     modelOverride: parsed.modelOverride ?? "",
     tui: parsed.tui ?? Boolean(process.stdout.isTTY && process.stderr.isTTY),
     humanReview,
@@ -383,6 +383,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break
       case "--keep-run-dir":
         parsed.keepRunDir = true
+        break
+      case "--no-keep-run-dir":
+        parsed.keepRunDir = false
         break
       case "--include-dirty":
         parsed.includeDirty = true
@@ -479,7 +482,8 @@ Flags:
   --skip <steps>           Skip these pipeline steps
   --resume <id>            Resume a previous run by its ID (steps with an existing report are
                            skipped; the run replays the pipeline it started with)
-  --keep-run-dir           Don't delete the run dir when done
+  --keep-run-dir           Keep the run dir when done (default)
+  --no-keep-run-dir        Delete the run dir on successful completion
   --yolo                   Auto-allow ask-level permissions (hard denylist still applies; shift+tab cycles it live in the TUI)
   --smart                  Smart auto-accept: an AI judge auto-allows safe ask-level requests and escalates risky ones (shift+tab cycles)
   --smart-model <provider/model[#variant]> Model for the smart auto-accept judge (default: defaults.autoAcceptJudgeModel, else the run's model)

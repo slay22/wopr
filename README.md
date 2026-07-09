@@ -150,8 +150,8 @@ archer --prompt-file prd.md --yolo
 # smart auto-accept: an AI judge allows safe requests and escalates risky ones
 archer --prompt-file prd.md --smart --smart-model anthropic/claude-haiku-4-5
 
-# preserve run dir after completion
-archer --prompt-file prd.md --keep-run-dir
+# delete the run dir after successful completion (kept by default)
+archer --prompt-file prd.md --no-keep-run-dir
 
 # change the base branch used to calculate diffs between phases
 # (when omitted, archer auto-detects it: origin's default branch, else
@@ -395,7 +395,7 @@ Each invocation creates `~/.archer/runs/<run-id>/`:
 
 `metadata.json` records the resolved pipeline the run executes plus each step's status, session ID, timing, cost, tokens, and model as the run progresses (written atomically, debounced). On `--resume`, the frozen pipeline is replayed — even if `.archer/config.yaml` changed since — and steps that already wrote their report are restored in the dashboard with their real duration, cost, and session, which can still be opened by clicking the pipeline row.
 
-The run dir is deleted on successful completion unless `--keep-run-dir`. If it fails, it's preserved for inspecting reports, diffs, and logs.
+The run dir is kept after the run by default (browse it with `archer runs`); pass `--no-keep-run-dir` to delete it on successful completion. If the run fails, it's always preserved for inspecting reports, diffs, and logs.
 
 The target repo only sees commits with prefix `archer(<phase>): ...`, made on the current branch. Normal runs leave no CLI files in the project; `archer init` intentionally creates `.archer/config.yaml` when you want project-local configuration.
 
