@@ -11,6 +11,7 @@ import {
   builtInPipelines,
   defaultGptModel,
   defaultGptVariant,
+  defaultImplementReviewModel,
   defaultPipelineName,
   humanReviewStep,
   readOnlyAgentSuffix,
@@ -200,10 +201,12 @@ pipelines:
         reports: none
       - patterns
       - security
-      - design
+      - agent: design
+        model: ${defaultImplementReviewModel}
       - agent: tests
         reports: none
       - agent: adversarial
+        model: ${defaultImplementReviewModel}
         reports: all
 
 # Optional shell hooks. Top-level hooks run for every pipeline; hooks under
@@ -637,7 +640,8 @@ function templateStep(raw: StepSpec, globalModel: string): StepSpec {
   if (step.agent === humanReviewStep) return step.agent
   const agent = builtInAgents.find((candidate) => candidate.name === (agentAliases[step.agent] ?? step.agent))
   const preferred = agent?.defaultModel
-  const withModel = preferred && preferred !== globalModel ? { ...step, model: preferred } : step
+  const hasStepModel = step.model !== undefined || step.models !== undefined
+  const withModel = !hasStepModel && preferred && preferred !== globalModel ? { ...step, model: preferred } : step
   // Collapse a bare { agent } back to its string shorthand for clean YAML.
   return Object.keys(withModel).length === 1 ? withModel.agent : withModel
 }

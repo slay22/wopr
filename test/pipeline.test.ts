@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   builtInAgents,
   builtInPipelines,
+  defaultImplementReviewModel,
   defaultPipeline,
   resolvePipeline,
   slugifyModel,
@@ -61,7 +62,7 @@ describe("default pipeline", () => {
     ])
   })
 
-  test("keeps the historical model split: gpt for audits, opus for design and adversarial", () => {
+  test("uses GPT for implementation/audits and GLM 5.2 for design/adversarial", () => {
     const byName = Object.fromEntries(
       defaultPipeline()
         .steps.filter((step): step is AgentStep => step.type === "agent")
@@ -69,9 +70,25 @@ describe("default pipeline", () => {
     )
 
     expect(byName.implementer).toMatchObject({ model: "openai/gpt-5.5", variant: "xhigh" })
-    expect(byName.design).toMatchObject({ model: "anthropic/claude-opus-4-8" })
+    expect(byName.design).toMatchObject({ model: defaultImplementReviewModel })
     expect(byName.design?.variant).toBeUndefined()
-    expect(byName.adversarial?.model).toBe("anthropic/claude-opus-4-8")
+    expect(byName.adversarial?.model).toBe(defaultImplementReviewModel)
+  })
+
+  test("keeps implement design/adversarial on GLM 5.2 even when defaults.model is GPT", () => {
+    const byName = Object.fromEntries(
+      resolvePipeline({
+        name: "implement",
+        spec: builtInPipelines.implement!,
+        agents: builtInAgents,
+        defaultModel: "openai/gpt-5.5#xhigh",
+      })
+        .steps.filter((step): step is AgentStep => step.type === "agent")
+        .map((step) => [step.name, step]),
+    )
+
+    expect(byName.design?.model).toBe(defaultImplementReviewModel)
+    expect(byName.adversarial?.model).toBe(defaultImplementReviewModel)
   })
 })
 
@@ -117,12 +134,12 @@ describe("built-in implement-lite pipeline", () => {
     expect(byName.adversarial).toMatchObject({ model: "anthropic/claude-opus-4-8" })
   })
 
-  test("keeps GLM 5.2 scoped to the lower-cost implementation variant", () => {
+  test("keeps GLM 5.2 scoped to the implementation pipelines", () => {
     const glmPipelines = Object.entries(builtInPipelines)
       .filter(([, spec]) => JSON.stringify(spec).includes("openrouter/z-ai/glm-5.2"))
       .map(([name]) => name)
 
-    expect(glmPipelines).toEqual(["implement-lite"])
+    expect(glmPipelines).toEqual(["implement", "implement-lite"])
   })
 })
 

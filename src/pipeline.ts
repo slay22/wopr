@@ -3,6 +3,7 @@ import type { AgentSpec, AgentStep, HumanStep, Pipeline, Step } from "./types"
 export const defaultGptModel = "openai/gpt-5.5"
 export const defaultGptVariant = "xhigh"
 export const defaultOpusModel = "anthropic/claude-opus-4-8"
+export const defaultImplementReviewModel = "openrouter/z-ai/glm-5.2"
 
 const fallbackModel = `${defaultGptModel}#${defaultGptVariant}`
 
@@ -204,9 +205,9 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
       { agent: "implementer", reports: "none" },
       "patterns",
       "security",
-      "design",
+      { agent: "design", model: defaultImplementReviewModel },
       { agent: "tests", reports: "none" },
-      { agent: "adversarial", reports: "all" },
+      { agent: "adversarial", model: defaultImplementReviewModel, reports: "all" },
     ],
   },
   "implement-lite": {

@@ -20,7 +20,7 @@ import {
   writeDefaultArcherConfig,
   writeDefaultProjectConfig,
 } from "../src/config"
-import { builtInAgents, defaultGptModel, defaultGptVariant, defaultOpusModel, isParallelSpec } from "../src/pipeline"
+import { builtInAgents, defaultGptModel, defaultGptVariant, defaultImplementReviewModel, defaultOpusModel, isParallelSpec } from "../src/pipeline"
 
 const dirs: string[] = []
 
@@ -428,11 +428,12 @@ describe("serialization", () => {
     expect(reparsed.hooks).toEqual(config.hooks)
   })
 
-  test("defaultConfigTemplate inlines opus on design and round-trips", () => {
+  test("defaultConfigTemplate preserves implement step model overrides and round-trips", () => {
     const template = defaultConfigTemplate()
     expect(template.defaults.model).toBe(`${defaultGptModel}#${defaultGptVariant}`)
     const steps = template.pipelines.implement!.steps
-    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && step.agent === "design")).toEqual({ agent: "design", model: defaultOpusModel })
+    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && step.agent === "design")).toEqual({ agent: "design", model: defaultImplementReviewModel })
+    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && step.agent === "adversarial")).toEqual({ agent: "adversarial", model: defaultImplementReviewModel, reports: "all" })
     const reparsed = parse(serializeArcherConfig(template))
     expect(reparsed.defaults).toEqual(template.defaults)
     expect(reparsed.pipelines).toEqual(template.pipelines)
@@ -509,9 +510,9 @@ describe("default config init", () => {
       { agent: "implementer", reports: "none" },
       "patterns",
       "security",
-      "design",
+      { agent: "design", model: defaultImplementReviewModel },
       { agent: "tests", reports: "none" },
-      { agent: "adversarial", reports: "all" },
+      { agent: "adversarial", model: defaultImplementReviewModel, reports: "all" },
     ])
     expect(config.permissions).toEqual({ allow: [], deny: [] })
     expect(config.hooks).toEqual({ pre: [], post: [], pipelines: {} })

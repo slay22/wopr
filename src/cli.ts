@@ -66,29 +66,11 @@ export async function parseAndRun(argv: string[]) {
     return
   }
   if (command.type === "runs") {
-    // The browser can open a run's dashboard and come back, so loop until the
-    // user resumes (which hands off to a real run) or quits.
-    let initialRunID = command.runID
-    for (;;) {
-      const resolution = await browseRuns(initialRunID)
-      if (resolution.type === "resume") {
-        await run(await resumeOptions(resolution.runID, resolution.targetDir))
-        return
-      }
-      if (resolution.type === "open") {
-        // Lazily imported: attaching pulls in the dashboard + opencode client.
-        const { openRunDashboard } = await import("./attach")
-        await openRunDashboard(resolution.runID)
-        initialRunID = resolution.runID
-        continue
-      }
-      return
-    }
+    await openRunsBrowser(command.runID)
+    return
   }
   if (command.type === "config") {
-    // Imported lazily so normal runs never pull in the opentui editor.
-    const { editConfigTui } = await import("./config-tui")
-    await editConfigTui({ targetDir: command.targetDir })
+    await openConfigEditor(command.targetDir)
     return
   }
   if (command.type === "init") {
@@ -111,6 +93,11 @@ async function launchInteractiveRun(targetDir: string) {
   const { launchRunTui } = await import("./launch-tui")
   const selection = await launchRunTui({ targetDir })
   if (!selection) return
+  if ("action" in selection) {
+    if (selection.action === "runs") await openRunsBrowser()
+    else await openConfigEditor(targetDir)
+    return
+  }
 
   const parsed = parseArgs([])
   parsed.targetDir = selection.targetDir
@@ -130,6 +117,33 @@ async function launchInteractiveRun(targetDir: string) {
   }
 
   await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt })
+}
+
+async function openRunsBrowser(initialRunID?: string) {
+  // The browser can open a run's dashboard and come back, so loop until the
+  // user resumes (which hands off to a real run) or quits.
+  let currentRunID = initialRunID
+  for (;;) {
+    const resolution = await browseRuns(currentRunID)
+    if (resolution.type === "resume") {
+      await run(await resumeOptions(resolution.runID, resolution.targetDir))
+      return
+    }
+    if (resolution.type === "open") {
+      // Lazily imported: attaching pulls in the dashboard + opencode client.
+      const { openRunDashboard } = await import("./attach")
+      await openRunDashboard(resolution.runID)
+      currentRunID = resolution.runID
+      continue
+    }
+    return
+  }
+}
+
+async function openConfigEditor(targetDir: string) {
+  // Imported lazily so normal runs never pull in the opentui editor.
+  const { editConfigTui } = await import("./config-tui")
+  await editConfigTui({ targetDir })
 }
 
 // The browser resumes with default flags; metadata recovers both the repo the

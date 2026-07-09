@@ -24,9 +24,9 @@ PRD ──► implementer ──► patterns ──► security ──► design
 | `implementer` | `implementer` | `openai/gpt-5.5#xhigh` | Implements the feature respecting repo patterns |
 | `patterns` | `pattern-auditor` | `openai/gpt-5.5#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
 | `security` | `security-auditor` | `openai/gpt-5.5#xhigh` | Audits and fixes security issues |
-| `design` | `design-polisher` | `anthropic/claude-opus-4-8` | Polishes UI following the repo's design system |
+| `design` | `design-polisher` | `openrouter/z-ai/glm-5.2` | Polishes UI following the repo's design system |
 | `tests` | `test-engineer` | `openai/gpt-5.5#xhigh` | Automated tests + relevant E2E/integration coverage |
-| `adversarial` | `adversarial-reviewer` | `anthropic/claude-opus-4-8` | Final adversarial review before PR creation |
+| `adversarial` | `adversarial-reviewer` | `openrouter/z-ai/glm-5.2` | Final adversarial review before PR creation |
 
 ## Built-in pipelines
 
@@ -63,7 +63,7 @@ opencode models openai
 opencode models anthropic
 ```
 
-To use different providers, authenticate them in OpenCode and select models as `provider/model`. Archer defaults to `openai/gpt-5.5` with variant `xhigh` for non-design phases, and `anthropic/claude-opus-4-8` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps those GPT phases to `openrouter/z-ai/glm-5.2`.
+To use different providers, authenticate them in OpenCode and select models as `provider/model`. Archer's default `implement` pipeline uses `openai/gpt-5.5#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
 
 ## Installation
 
@@ -294,7 +294,7 @@ attachments:                       # attached to every step, like repeatable --f
 
 The rules:
 
-- **Precedence**: CLI flag > project config > global config > built-in default. Within a config, for models specifically: step `model` > agent `model` > `defaults.model` > the agent's built-in preference (opus for design/adversarial) > `openai/gpt-5.5#xhigh`. `--model` overrides everything.
+- **Precedence**: CLI flag > project config > global config > built-in default. Within a config, for models specifically: step `model` > agent `model` > `defaults.model` > the agent's built-in preference (Opus for design/adversarial when the step doesn't set its own model) > `openai/gpt-5.5#xhigh`. `--model` overrides everything.
 - **Conventions over wiring**: every agent step gets the PRD, the cumulative diff against the base branch (except the first step; opt out with `diff: false`), and the previous step's report (`reports: previous|all|none|[names]`). Its report lands at `reports/<step>.md` and its commit is `archer(<step>): …`.
 - **Aliases**: the built-in agents answer to their short names in steps — `patterns`, `security`, `design`, `tests`, `adversarial` — as well as their full names.
 - **Read-only agents**: set `agents.<name>.readOnly: true` to enforce audit-only behavior. Archer disables the agent's write/edit/bash tools, denies edit/bash/task permissions, and saves the phase report from the assistant response if the agent cannot write it directly.

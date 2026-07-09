@@ -25,6 +25,12 @@ export type LaunchRunSelection = {
   worktree?: { dir: string; branch: string }
 }
 
+export type LaunchNavigationSelection =
+  | { action: "runs" }
+  | { action: "config" }
+
+export type LaunchRunTuiResult = LaunchRunSelection | LaunchNavigationSelection | undefined
+
 // One resolved step, flattened for the preview: `groupId` ties concurrent
 // steps together (the runner batches same-groupId steps), and `stepName` is
 // the pre-fan-out logical name shared by every `models:` variant. The tree in
@@ -110,7 +116,7 @@ const toggles: readonly ToggleSpec[] = [
   },
 ]
 
-export async function launchRunTui(options: { targetDir: string }): Promise<LaunchRunSelection | undefined> {
+export async function launchRunTui(options: { targetDir: string }): Promise<LaunchRunTuiResult> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("archer needs an interactive terminal to open the launcher")
   }
@@ -177,9 +183,9 @@ function shortModelLabel(model: string, variant?: string): string {
 }
 
 class LaunchPicker {
-  readonly result: Promise<LaunchRunSelection | undefined>
+  readonly result: Promise<LaunchRunTuiResult>
 
-  private resolveResult!: (selection: LaunchRunSelection | undefined) => void
+  private resolveResult!: (selection: LaunchRunTuiResult) => void
   private mode: Mode = "pipelines"
   private selected = 0
   private scroll = 0
@@ -437,6 +443,12 @@ class LaunchPicker {
       case "linefeed":
         this.openPrompt()
         return
+      case "r":
+        this.finish({ action: "runs" })
+        return
+      case "c":
+        this.finish({ action: "config" })
+        return
       case "q":
       case "escape":
         this.finish(undefined)
@@ -545,6 +557,12 @@ class LaunchPicker {
         this.mode = "prompt"
         this.cursor = this.prompt.length
         this.render()
+        return
+      case "r":
+        this.finish({ action: "runs" })
+        return
+      case "c":
+        this.finish({ action: "config" })
         return
       case "q":
         this.finish(undefined)
@@ -687,7 +705,7 @@ class LaunchPicker {
     return this.choices[this.selected] ?? this.choices[0]!
   }
 
-  private finish(selection: LaunchRunSelection | undefined) {
+  private finish(selection: LaunchRunTuiResult) {
     clearInterval(this.ticker)
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.keyInput.off("paste", this.handlePaste)
@@ -804,21 +822,19 @@ class LaunchPicker {
     return joinLines(rows)
   }
 
-  // One row per pipeline: a selection caret, a source/validity dot, the name,
-  // and an optional right-aligned badge. The dot already encodes the source
-  // (● configured · ○ built-in · ! invalid), so the row only spends a badge on
-  // the signal that dot can't carry — the default, and user-defined pipelines.
+  // One row per pipeline: a selection dot, the name, and an optional
+  // right-aligned badge. The dot fills only for the selected row; default/custom
+  // state is carried by the badge so unselected dots stay visually uniform.
   private pipelineRow(choice: PipelineChoice, selected: boolean, width: number) {
-    const marker = selected ? fg(theme.accent)("▸ ") : raw("  ")
-    const dot = choice.valid ? fg(choice.source === "configured" ? theme.teal : theme.dim)(choice.source === "configured" ? "●" : "○") : fg(theme.red)("!")
+    const dot = choice.valid ? fg(selected ? theme.accent : theme.dim)(selected ? "●" : "○") : fg(theme.red)("!")
     const badgeText = choice.isDefault ? "default" : choice.source === "configured" ? "custom" : ""
     const badge: TextChunk[] = badgeText ? [fg(choice.isDefault ? theme.green : theme.teal)(badgeText)] : []
-    // Prefix is caret (2) + dot (1) + space (1); reserve the badge plus a
+    // Prefix is dot (1) + space (1); reserve the badge plus a
     // 1-cell gap so a long name truncates instead of wrapping into the badge.
-    const nameWidth = Math.max(3, width - 4 - (badgeText ? badgeText.length + 1 : 0))
+    const nameWidth = Math.max(3, width - 2 - (badgeText ? badgeText.length + 1 : 0))
     const name = truncate(choice.name, nameWidth)
     const label = selected ? bold(fg(theme.text)(name)) : fg(theme.text)(name)
-    return padBetween([marker, dot, raw(" "), label], badge, width)
+    return padBetween([dot, raw(" "), label], badge, width)
   }
 
   private detailContent(width: number) {
@@ -971,7 +987,7 @@ class LaunchPicker {
     const right = [fg(theme.faint)(`${this.selected + 1}/${this.choices.length}`)]
     if (this.mode === "pipelines") {
       return padBetween(
-        [fg(theme.dim)("↑/↓ select · "), fg(theme.accent)("enter"), fg(theme.dim)(" prompt · "), fg(theme.accent)("q"), fg(theme.dim)(" quit")],
+        [fg(theme.dim)("↑/↓ select · "), fg(theme.accent)("enter"), fg(theme.dim)(" prompt · "), fg(theme.accent)("r"), fg(theme.dim)(" runs · "), fg(theme.accent)("c"), fg(theme.dim)(" config · "), fg(theme.accent)("q"), fg(theme.dim)(" quit")],
         right,
         width,
       )
@@ -984,7 +1000,7 @@ class LaunchPicker {
       )
     }
     return padBetween(
-      [fg(theme.dim)("↑/↓ select · "), fg(theme.accent)("space"), fg(theme.dim)(" toggle · "), fg(theme.accent)("enter"), fg(theme.dim)(" start · "), fg(theme.accent)("p"), fg(theme.dim)(" prompt · "), fg(theme.accent)("q"), fg(theme.dim)(" quit")],
+      [fg(theme.dim)("↑/↓ select · "), fg(theme.accent)("space"), fg(theme.dim)(" toggle · "), fg(theme.accent)("enter"), fg(theme.dim)(" start · "), fg(theme.accent)("p"), fg(theme.dim)(" prompt · "), fg(theme.accent)("r"), fg(theme.dim)(" runs · "), fg(theme.accent)("c"), fg(theme.dim)(" config · "), fg(theme.accent)("q"), fg(theme.dim)(" quit")],
       [fg(theme.faint)(`${this.optionIndex + 1}/${toggles.length}`)],
       width,
     )
