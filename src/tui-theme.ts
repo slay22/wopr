@@ -206,26 +206,8 @@ function chunksLength(chunks: TextChunk[]) {
 
 // East-Asian wide chars and emoji take two terminal cells; counting UTF-16
 // units would push the right-aligned columns out of the panel.
-function displayWidth(text: string) {
-  let width = 0
-  for (const char of text) {
-    width += isWideCodePoint(char.codePointAt(0)!) ? 2 : 1
-  }
-  return width
-}
-
-function isWideCodePoint(code: number) {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe4f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  )
+export function displayWidth(text: string) {
+  return Bun.stringWidth(text)
 }
 
 // Block elements render single-width in every terminal font, and the
@@ -296,8 +278,10 @@ export function shortPath(dir: string, max: number) {
 
 export function truncate(value: string, max: number) {
   const singleLine = value.replace(/\s+/g, " ").trim()
-  if (singleLine.length <= max) return singleLine
-  return `${singleLine.slice(0, Math.max(0, max - 1))}…`
+  if (displayWidth(singleLine) <= max) return singleLine
+  if (max <= 0) return ""
+  if (max === 1) return "…"
+  return `${takeDisplayCells(singleLine, max - 1).head}…`
 }
 
 // Markdown stays unrendered on purpose; headings get the accent so long
@@ -312,11 +296,45 @@ export function styleSummaryLine(line: string): StyledText {
 export function wrapLines(lines: string[], width: number): string[] {
   const wrapped: string[] = []
   for (const line of lines) {
-    if (line.length <= width) {
+    if (width <= 0) {
+      wrapped.push("")
+      continue
+    }
+    if (displayWidth(line) <= width) {
       wrapped.push(line)
       continue
     }
-    for (let i = 0; i < line.length; i += width) wrapped.push(line.slice(i, i + width))
+    let rest = line
+    while (rest && displayWidth(rest) > width) {
+      const part = takeDisplayCells(rest, width)
+      // Widths used by the TUI are always >= 2. This fallback prevents an
+      // infinite loop if a caller asks a one-cell column to hold a wide glyph.
+      if (!part.head) {
+        const first = [...graphemes.segment(rest)][0]?.segment ?? ""
+        wrapped.push(first)
+        rest = rest.slice(first.length)
+      } else {
+        wrapped.push(part.head)
+        rest = part.tail
+      }
+    }
+    if (rest) wrapped.push(rest)
   }
   return wrapped
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+function takeDisplayCells(text: string, max: number): { head: string; tail: string } {
+  let head = ""
+  let cells = 0
+  let consumed = 0
+  for (const part of graphemes.segment(text)) {
+    const width = displayWidth(part.segment)
+    if (cells + width > max) break
+    head += part.segment
+    cells += width
+    consumed = part.index + part.segment.length
+  }
+  return { head, tail: text.slice(consumed) }
 }

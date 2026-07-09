@@ -21,6 +21,7 @@ import {
   formatElapsed,
   formatMoney,
   formatTime,
+  displayWidth,
   joinLines,
   padBetween,
   paletteForTerminal,
@@ -88,8 +89,23 @@ const pipelineWidth = 32
 const feedLimit = 100
 
 // The right-hand content panel is a three-tab view of the focused phase.
-type ContentTab = "logs" | "reports" | "session"
+export type ContentTab = "logs" | "reports" | "session"
 const contentTabOrder: readonly ContentTab[] = ["session", "reports", "logs"]
+
+export type TuiDashboardMode = "historical" | "live"
+
+// A live run is primarily something to follow, while a reconstructed run is
+// primarily something to inspect. Logs remain available but are deliberately
+// never the initial tab.
+export function initialContentTab(mode: TuiDashboardMode): ContentTab {
+  return mode === "historical" ? "reports" : "session"
+}
+
+export type PipelineSelectionTarget =
+  | { kind: "phase"; name: string }
+  | { kind: "group"; groupId: string; stepName?: string }
+
+type GroupSelection = Extract<PipelineSelectionTarget, { kind: "group" }>
 
 const permissionChoices: ReadonlyArray<{ reply: PermissionReply; label: string; color: PaletteColor }> = [
   { reply: "once", label: "allow once", color: "green" },
@@ -172,7 +188,7 @@ export async function createTuiProgress(
   // offlineSessions: re-opened finished runs have no live server, so [o] opens
   // their stored sessions from disk instead of attaching. observer: read-only
   // attach to another process's run, where [i] takeover must be refused.
-  options?: { offlineSessions?: boolean; observer?: boolean },
+  options?: { offlineSessions?: boolean; observer?: boolean; mode?: TuiDashboardMode },
 ): Promise<ProgressUI> {
   // No backgroundColor yet: the palette is only chosen after the terminal
   // answers the background query, so a light terminal never flashes dark.
@@ -184,7 +200,15 @@ export async function createTuiProgress(
   })
   const mode = await renderer.waitForThemeMode(1_000).catch(() => null)
   setTheme(paletteForTerminal(mode, terminalBackgroundHex(renderer)))
-  return new TuiProgress(renderer, phases, onAbort, autoAccept, options?.offlineSessions ?? false, options?.observer ?? false)
+  return new TuiProgress(
+    renderer,
+    phases,
+    onAbort,
+    autoAccept,
+    options?.offlineSessions ?? false,
+    options?.observer ?? false,
+    initialContentTab(options?.mode ?? "live"),
+  )
 }
 
 export class TuiProgress implements ProgressUI {
@@ -199,6 +223,9 @@ export class TuiProgress implements ProgressUI {
   // navigates, then `manualFocus` pins it so any step (past, present, or
   // still-scheduled) stays open for inspection.
   private selected = 0
+  // Group headers are first-class selections. The concrete index above is kept
+  // on one of the group's children so returning to leaf navigation is stable.
+  private selectedGroup?: GroupSelection
   private manualFocus = false
   // First visible step row in the pipeline panel when the tree overflows it.
   private pipelineScroll = 0
@@ -228,9 +255,9 @@ export class TuiProgress implements ProgressUI {
   private readonly feedBox: BoxRenderable
   private readonly feedText: TextRenderable
   private readonly footerText: TextRenderable
-  // Rebuilt on every pipeline render: panel row index → phase name, so clicks
-  // resolve against exactly what is on screen (the active phase adds a row).
-  private pipelineRowPhases: (string | undefined)[] = []
+  // Rebuilt on every pipeline render: panel row index → selectable tree target,
+  // so group headers and concrete phases both resolve exactly as rendered.
+  private pipelineRowTargets: (PipelineSelectionTarget | undefined)[] = []
   private readonly overlay: BoxRenderable
   private readonly modal: BoxRenderable
   private readonly modalText: TextRenderable
@@ -254,6 +281,9 @@ export class TuiProgress implements ProgressUI {
   // Phase reports read lazily from the run dir; the cache entry is dropped when
   // a phase finishes so a report written mid-run is picked up on the next view.
   private readonly reports = new Map<string, string[] | "loading" | "missing">()
+  // Identity token for each async report read. Terminal phase transitions
+  // invalidate it so an older failed read cannot repopulate a stale "missing".
+  private readonly reportLoads = new Map<string, object>()
   // Visible rows of the content tab, captured at render time for paging keys.
   private contentPageRows = 10
   // The content panel has an explicit read focus: normally ↑/↓ move the
@@ -264,11 +294,12 @@ export class TuiProgress implements ProgressUI {
   private reportScroll = 0
   private logScroll = 0
   private sessionScroll = 0
+  private groupScroll = 0
   private contentPosition = ""
   // The content panel's active tab, scoped to the focused phase: its activity
   // feed, the report it wrote (if any), or a read-only "follow along" view of
   // its opencode session. [o] still opens the interactive session externally.
-  private contentTab: ContentTab = "logs"
+  private contentTab: ContentTab
   // Click hit-regions for the tab strip, rebuilt every render: column span → tab.
   private feedTabRegions: { tab: ContentTab; start: number; end: number }[] = []
   private readonly handleThemeMode = (mode: unknown) => {
@@ -457,7 +488,9 @@ export class TuiProgress implements ProgressUI {
     // When true (attached read-only to another process's run), [i] is refused:
     // no runner reads this dashboard's takeover set.
     private readonly observer = false,
+    initialTab: ContentTab = "session",
   ) {
+    this.contentTab = initialTab
     this.phases = phases.map((phase) => ({
       ...phase,
       status: "pending",
@@ -516,8 +549,8 @@ export class TuiProgress implements ProgressUI {
     const focusFromPipeline = (event: { y: number; preventDefault(): void; stopPropagation(): void }) => {
       event.preventDefault()
       event.stopPropagation()
-      const name = this.pipelineRowPhases[event.y - this.pipelineText.y]
-      if (name) this.selectPhaseByName(name)
+      const target = this.pipelineRowTargets[event.y - this.pipelineText.y]
+      if (target) this.selectPipelineTarget(target)
     }
 
     // The wheel over the pipeline steps the phase selector, one row per tick.
@@ -834,7 +867,7 @@ export class TuiProgress implements ProgressUI {
   phaseCompleted(name: string, detail = "") {
     this.setPhase(name, "completed")
     // Drop any cached "missing" so the report this phase just wrote loads.
-    this.reports.delete(name)
+    this.invalidateReport(name)
     this.addEvent(name, "system", detail || "phase completed")
   }
 
@@ -845,7 +878,7 @@ export class TuiProgress implements ProgressUI {
 
   phaseFailed(name: string, detail = "") {
     this.setPhase(name, "failed")
-    this.reports.delete(name)
+    this.invalidateReport(name)
     this.addEvent(name, "error", detail || "failed")
   }
 
@@ -867,6 +900,9 @@ export class TuiProgress implements ProgressUI {
       this.recalculateUsage(phase)
     }
     if (snapshot.model) phase.lastStepModel = snapshot.model
+    // Live observers can have loaded "missing" while this phase was still
+    // running; restoration means its final report is now ready to be retried.
+    this.invalidateReport(name)
     phase.updatedAt = Date.now()
     const parts = [
       snapshot.durationMs !== undefined ? formatElapsed(snapshot.durationMs) : "",
@@ -926,6 +962,7 @@ export class TuiProgress implements ProgressUI {
       const failed = this.phases.findIndex((phase) => phase.status === "failed")
       if (failed >= 0) {
         this.selected = failed
+        this.selectedGroup = undefined
         this.manualFocus = true
       }
       this.resetContentScroll()
@@ -947,21 +984,55 @@ export class TuiProgress implements ProgressUI {
     return this.phases[this.selected]
   }
 
+  private focusedGroup(): { selection: GroupSelection; members: PhaseState[] } | undefined {
+    const selection = this.selectedGroup
+    if (!selection) return undefined
+    const members = this.phases.filter(
+      (phase) =>
+        phase.groupId === selection.groupId &&
+        (selection.stepName === undefined || stepLabel(phase) === selection.stepName),
+    )
+    if (members.length === 0) {
+      this.selectedGroup = undefined
+      return undefined
+    }
+    return { selection, members }
+  }
+
+  private currentPipelineTarget(): PipelineSelectionTarget | undefined {
+    if (this.selectedGroup) return this.selectedGroup
+    const phase = this.focusedPhase()
+    return phase ? { kind: "phase", name: phase.name } : undefined
+  }
+
   // Moves the focused phase through the pipeline (the tab selector). The first
   // move pins focus (manualFocus) so it no longer auto-follows live activity.
   private moveSelection(delta: number) {
-    if (this.phases.length === 0) return
-    this.manualFocus = true
-    this.selected = Math.max(0, Math.min(this.phases.length - 1, this.selected + delta))
-    this.resetContentScroll()
-    this.render()
+    const targets = pipelineSelectionTargets(this.phases)
+    if (targets.length === 0) return
+    const current = this.currentPipelineTarget()
+    const currentIndex = current ? targets.findIndex((target) => samePipelineTarget(target, current)) : -1
+    const nextIndex = Math.max(0, Math.min(targets.length - 1, (currentIndex < 0 ? 0 : currentIndex) + delta))
+    this.selectPipelineTarget(targets[nextIndex]!)
   }
 
   private selectPhaseByName(name: string) {
-    const index = this.phases.findIndex((phase) => phase.name === name)
+    this.selectPipelineTarget({ kind: "phase", name })
+  }
+
+  private selectPipelineTarget(target: PipelineSelectionTarget) {
+    const index =
+      target.kind === "phase"
+        ? this.phases.findIndex((phase) => phase.name === target.name)
+        : this.phases.findIndex(
+            (phase) =>
+              phase.groupId === target.groupId &&
+              (target.stepName === undefined || stepLabel(phase) === target.stepName),
+          )
     if (index === -1) return
     this.manualFocus = true
     this.selected = index
+    this.selectedGroup = target.kind === "group" ? target : undefined
     this.resetContentScroll()
     this.render()
   }
@@ -983,9 +1054,15 @@ export class TuiProgress implements ProgressUI {
     this.reportScroll = 0
     this.logScroll = 0
     this.sessionScroll = 0
+    this.groupScroll = 0
   }
 
   private scrollContent(delta: number) {
+    if (this.selectedGroup) {
+      this.groupScroll = Math.max(0, this.groupScroll + delta)
+      this.render()
+      return
+    }
     switch (this.contentTab) {
       case "reports":
         this.reportScroll = Math.max(0, this.reportScroll + delta)
@@ -1001,14 +1078,16 @@ export class TuiProgress implements ProgressUI {
   }
 
   private scrollContentToStart() {
-    if (this.contentTab === "session") this.sessionScroll = Number.MAX_SAFE_INTEGER
+    if (this.selectedGroup) this.groupScroll = 0
+    else if (this.contentTab === "session") this.sessionScroll = Number.MAX_SAFE_INTEGER
     else if (this.contentTab === "reports") this.reportScroll = 0
     else this.logScroll = 0
     this.render()
   }
 
   private scrollContentToEnd() {
-    if (this.contentTab === "session") this.sessionScroll = 0
+    if (this.selectedGroup) this.groupScroll = Number.MAX_SAFE_INTEGER
+    else if (this.contentTab === "session") this.sessionScroll = 0
     else if (this.contentTab === "reports") this.reportScroll = Number.MAX_SAFE_INTEGER
     else this.logScroll = Number.MAX_SAFE_INTEGER
     this.render()
@@ -1043,16 +1122,27 @@ export class TuiProgress implements ProgressUI {
   }
 
   private loadReport(name: string, runDir: string) {
+    const token = {}
+    this.reportLoads.set(name, token)
     this.reports.set(name, "loading")
     readFile(join(runDir, "reports", `${name}.md`), "utf8")
       .then((body) => {
+        if (this.reportLoads.get(name) !== token) return
+        this.reportLoads.delete(name)
         this.reports.set(name, body.replace(/\r\n/g, "\n").split("\n"))
         this.render()
       })
       .catch(() => {
+        if (this.reportLoads.get(name) !== token) return
+        this.reportLoads.delete(name)
         this.reports.set(name, "missing")
         this.render()
       })
+  }
+
+  private invalidateReport(name: string) {
+    this.reportLoads.delete(name)
+    this.reports.delete(name)
   }
 
   message(message: string) {
@@ -1203,6 +1293,11 @@ export class TuiProgress implements ProgressUI {
   // Opens the focused phase's opencode session in an external window; falls
   // back to any running phase if focus somehow lands on one without a session.
   private openActiveSessionWindow(source: "click" | "key") {
+    if (this.selectedGroup) {
+      this.addEvent("archer", "system", "select a model row to open its OpenCode session")
+      this.render()
+      return
+    }
     const active = this.focusedPhase() ?? this.phases.find((phase) => phase.status === "running")
     if (!active) {
       this.addEvent("archer", "system", "no active opencode session to open yet")
@@ -1220,6 +1315,11 @@ export class TuiProgress implements ProgressUI {
     if (this.finished) return
     if (this.observer) {
       this.addEvent("archer", "system", "interactive mode isn't available while attached read-only")
+      this.render()
+      return
+    }
+    if (this.selectedGroup) {
+      this.addEvent("archer", "system", "select a running model row before enabling interactive mode")
       this.render()
       return
     }
@@ -1338,17 +1438,22 @@ export class TuiProgress implements ProgressUI {
     // be inspected without the live run yanking focus away.
     if (!this.finished && !this.manualFocus) {
       const activeIndex = this.phases.findIndex((phase) => phase.name === this.activePhase)
-      if (activeIndex >= 0) this.selected = activeIndex
+      if (activeIndex >= 0) {
+        this.selected = activeIndex
+        this.selectedGroup = undefined
+      }
     }
-    const focus = this.focusedPhase()
+    const group = this.focusedGroup()
+    const focus = group ? undefined : this.focusedPhase()
     this.pipelineBox.borderColor = this.contentFocused ? theme.borderDim : theme.accent
     this.feedBox.borderColor = this.contentFocused ? theme.accent : theme.borderDim
 
-    // Detail panel: the focused phase's header — name, status, model, cost,
-    // tokens, diff — the same shape whether it's running, finished, or still
-    // scheduled (a future step reads as scheduled with zeroed usage).
-    const detailLines = this.detailContent(focus, now, rightWidth)
-    this.stepBox.title = " step "
+    // Detail panel: either one concrete phase or an aggregate for a selected
+    // parallel/multi-model header.
+    const detailLines = group
+      ? this.groupDetailContent(group.selection, group.members, now, rightWidth)
+      : this.detailContent(focus, now, rightWidth)
+    this.stepBox.title = group ? (group.selection.stepName === undefined ? " parallel group " : " step group ") : " step "
     this.stepBox.height = detailLines.length + 2
     this.stepText.content = joinLines(detailLines)
 
@@ -1375,8 +1480,9 @@ export class TuiProgress implements ProgressUI {
     this.pipelineText.content = this.pipelineContent(now, bodyHeight - 2)
 
     // Body first: the active content tab computes the scroll indicator the rail shows.
-    const body =
-      this.contentTab === "reports"
+    const body = group
+      ? this.groupContentLines(group.selection, group.members, now, rightWidth, contentRows)
+      : this.contentTab === "reports"
         ? this.reportPanelLines(focus, rightWidth, contentRows)
         : this.contentTab === "session"
           ? this.sessionLines(focus, rightWidth, contentRows)
@@ -1449,18 +1555,24 @@ export class TuiProgress implements ProgressUI {
       plain(""),
     ]
     // Rebuilt in lockstep with `out`: one entry per rendered line so a click
-    // resolves against exactly what is on screen. Group headers point at their
-    // first member so a click still opens (or, on the finish screen, browses)
-    // something sensible.
-    const rows: (string | undefined)[] = [undefined, undefined]
-    const emit = (left: TextChunk[], right: TextChunk[], rowPhase: string | undefined) => {
+    // resolves against exactly what is on screen. Headers are real selectable
+    // targets instead of aliases for their first child.
+    const rows: (PipelineSelectionTarget | undefined)[] = [undefined, undefined]
+    const emit = (left: TextChunk[], right: TextChunk[], rowTarget: PipelineSelectionTarget | undefined) => {
       out.push(padBetween(left, right, width))
-      rows.push(rowPhase)
+      rows.push(rowTarget)
     }
     // The pipeline is the tab selector, live and finished alike: the focused
     // phase carries a ▸ marker at column 0 (before the tree prefix, so it stays
     // aligned across every depth).
-    const isSelected = (phase: PhaseState) => this.phases[this.selected] === phase
+    const selectedTarget = this.currentPipelineTarget()
+    const isTargetSelected = (target: PipelineSelectionTarget) =>
+      selectedTarget !== undefined && samePipelineTarget(target, selectedTarget)
+    const isOnSelectedPath = (phase: PhaseState) =>
+      this.selectedGroup
+        ? phase.groupId === this.selectedGroup.groupId &&
+          (this.selectedGroup.stepName === undefined || stepLabel(phase) === this.selectedGroup.stepName)
+        : this.phases[this.selected] === phase
     // Row index of the ▸ marker, so the scroll window below can follow it.
     let selectedRow = -1
 
@@ -1470,8 +1582,7 @@ export class TuiProgress implements ProgressUI {
     // between them. Deep nesting eats into the name, never into the layout —
     // which keeps `rows` one-to-one with the visible lines (clicks resolve).
     const emitLine = (args: {
-      rowPhase: string | undefined
-      selectedPhase?: PhaseState
+      rowTarget: PipelineSelectionTarget
       lasts: boolean[]
       icon: TextChunk
       labelText: string
@@ -1480,7 +1591,7 @@ export class TuiProgress implements ProgressUI {
       suffix?: TextChunk[]
       right: TextChunk[]
     }) => {
-      const selected = args.selectedPhase !== undefined && isSelected(args.selectedPhase)
+      const selected = isTargetSelected(args.rowTarget)
       if (selected) selectedRow = rows.length
       const left: TextChunk[] = []
       left.push(selected ? fg(theme.accent)("▸ ") : raw("  "))
@@ -1495,20 +1606,19 @@ export class TuiProgress implements ProgressUI {
       const label = truncate(args.labelText, budget)
       left.push(args.color ? args.color(label) : phaseNameChunk(label, args.labelStatus, selected))
       left.push(...suffix)
-      emit(left, args.right, args.rowPhase)
+      emit(left, args.right, args.rowTarget)
     }
 
     // A leaf row: a single phase (sequential step, human gate, or one member
     // of a concurrent group) labelled by `labelText`.
     const emitRow = (phase: PhaseState, lasts: boolean[], labelText: string, right: TextChunk[]) =>
-      emitLine({ rowPhase: phase.name, selectedPhase: phase, lasts, icon: statusIcon(phase.status, now), labelText, labelStatus: phase.status, right })
+      emitLine({ rowTarget: { kind: "phase", name: phase.name }, lasts, icon: statusIcon(phase.status, now), labelText, labelStatus: phase.status, right })
 
     // A fanned-out member, labelled by its model with the variant (if any) as
     // a faint suffix.
     const emitModelRow = (phase: PhaseState, lasts: boolean[]) =>
       emitLine({
-        rowPhase: phase.name,
-        selectedPhase: phase,
+        rowTarget: { kind: "phase", name: phase.name },
         lasts,
         icon: statusIcon(phase.status, now),
         labelText: modelLabel(phase),
@@ -1525,11 +1635,18 @@ export class TuiProgress implements ProgressUI {
     // nested sub-header), the label picks up the same accent as the focused
     // leaf so the whole ancestor chain reads as one highlighted path down the
     // tree, instead of only the leaf itself carrying any indication.
-    const emitHeader = (members: PhaseState[], labelText: string, kind: "step" | "parallel", count: number, lasts: boolean[]) => {
+    const emitHeader = (
+      members: PhaseState[],
+      labelText: string,
+      kind: "step" | "parallel",
+      count: number,
+      lasts: boolean[],
+      target: GroupSelection,
+    ) => {
       const status = groupStatus(members)
-      const onPath = members.some(isSelected)
+      const onPath = members.some(isOnSelectedPath)
       emitLine({
-        rowPhase: members[0]!.name,
+        rowTarget: target,
         lasts,
         icon: statusIcon(status, now),
         labelText,
@@ -1551,7 +1668,11 @@ export class TuiProgress implements ProgressUI {
       if (stepGroups.length === 1) {
         // A single step fanned out across models: the header names the step,
         // each member names just its model.
-        emitHeader(group, stepLabel(group[0]!), "step", group.length, [])
+        emitHeader(group, stepLabel(group[0]!), "step", group.length, [], {
+          kind: "group",
+          groupId: group[0]!.groupId!,
+          stepName: stepLabel(group[0]!),
+        })
         group.forEach((phase, index) => emitModelRow(phase, [index === group.length - 1]))
         continue
       }
@@ -1559,14 +1680,18 @@ export class TuiProgress implements ProgressUI {
       // A `parallel:` block of distinct steps; the header counts the steps,
       // and any step that is itself fanned out across models nests one level
       // deeper under its own ×N sub-header.
-      emitHeader(group, "parallel", "parallel", stepGroups.length, [])
+      emitHeader(group, "parallel", "parallel", stepGroups.length, [], { kind: "group", groupId: group[0]!.groupId! })
       stepGroups.forEach((members, stepIndex) => {
         const lastStep = stepIndex === stepGroups.length - 1
         if (members.length === 1) {
           emitRow(members[0]!, [lastStep], stepLabel(members[0]!), phaseMetaChunks(members[0]!, now))
           return
         }
-        emitHeader(members, stepLabel(members[0]!), "step", members.length, [lastStep])
+        emitHeader(members, stepLabel(members[0]!), "step", members.length, [lastStep], {
+          kind: "group",
+          groupId: members[0]!.groupId!,
+          stepName: stepLabel(members[0]!),
+        })
         members.forEach((phase, index) => emitModelRow(phase, [lastStep, index === members.length - 1]))
       })
     }
@@ -1586,8 +1711,49 @@ export class TuiProgress implements ProgressUI {
     }
     this.pipelineScroll = Math.max(0, Math.min(this.pipelineScroll, maxScroll))
     const start = this.pipelineScroll
-    this.pipelineRowPhases = [...rows.slice(0, headerRows), ...bodyRows.slice(start, start + bodyVisible)]
+    this.pipelineRowTargets = [...rows.slice(0, headerRows), ...bodyRows.slice(start, start + bodyVisible)]
     return joinLines([...out.slice(0, headerRows), ...body.slice(start, start + bodyVisible)])
+  }
+
+  // Aggregate header for a selected tree group. It stays compact so most of the
+  // right pane remains available for the per-child comparison below.
+  private groupDetailContent(selection: GroupSelection, members: PhaseState[], now: number, width: number): StyledText[] {
+    const status = groupStatus(members)
+    const logicalSteps = new Set(members.map(stepLabel)).size
+    const label = selection.stepName ?? "parallel"
+    const countLabel = selection.stepName
+      ? `${members.length} model${members.length === 1 ? "" : "s"}`
+      : `${logicalSteps} step${logicalSteps === 1 ? "" : "s"} · ${members.length} run${members.length === 1 ? "" : "s"}`
+    const head: TextChunk[] =
+      status === "running"
+        ? [fg(theme.accent)(`${spinnerFrame(now)} `), bold(fg(theme.text)(label))]
+        : [statusIcon(status, now), raw(" "), bold(fg(theme.text)(label))]
+    head.push(fg(theme.faint)(`  ·  ${countLabel}`))
+
+    const usage = totalUsage(members)
+    const usageReported = members.some((phase) => phase.usageReported)
+    const elapsed = members.map((phase) => phaseElapsed(phase, now)).filter((value): value is number => value !== undefined)
+    const statusCounts = (["running", "completed", "failed", "pending", "skipped"] as const)
+      .map((item) => [item, members.filter((phase) => phase.status === item).length] as const)
+      .filter(([, count]) => count > 0)
+      .map(([item, count]) => `${count} ${groupStatusLabel(item)}`)
+      .join(" · ")
+
+    const meta: TextChunk[] = []
+    if (elapsed.length > 0) meta.push(fg(theme.faint)("wall "), fg(theme.dim)(formatElapsed(Math.max(...elapsed))), fg(theme.faint)(" · "))
+    meta.push(
+      fg(theme.faint)("cost "),
+      fg(theme.dim)(usageReported ? formatMoney(usage.cost) : "—"),
+      fg(theme.faint)(" · tokens "),
+      fg(theme.dim)(usageReported ? `↑${formatCount(usage.tokens.input)} ↓${formatCount(usage.tokens.output)}` : "—"),
+    )
+
+    return [
+      new StyledText(head),
+      new StyledText([fg(theme.dim)(truncate(statusCounts, Math.max(20, width)))]),
+      new StyledText(meta),
+      t`${fg(theme.faint)("select a child row for full detail or OpenCode")}`,
+    ]
   }
 
   // The detail panel header for the focused phase — one shape for every state.
@@ -1677,6 +1843,14 @@ export class TuiProgress implements ProgressUI {
     this.contentPosition = ""
     if (visible <= 0) return []
     if (!phase) return [t`${fg(theme.dim)("no step selected")}`]
+    const lines = this.reportSourceLines(phase, width)
+    const maxScroll = Math.max(0, lines.length - visible)
+    this.reportScroll = Math.max(0, Math.min(this.reportScroll, maxScroll))
+    this.contentPosition = scrollPosition(this.reportScroll, maxScroll)
+    return lines.slice(this.reportScroll, this.reportScroll + visible)
+  }
+
+  private reportSourceLines(phase: PhaseState, width: number): StyledText[] {
     if (!this.runDir) return [t`${fg(theme.dim)("report directory not ready yet…")}`]
 
     const report = this.reports.get(phase.name)
@@ -1686,15 +1860,14 @@ export class TuiProgress implements ProgressUI {
     }
     if (report === "loading") return [t`${fg(theme.dim)("loading report…")}`]
     if (report === "missing") {
+      if (phase.status === "skipped") return [t`${fg(theme.dim)("this step was skipped and wrote no report")}`]
+      if (this.finished && phase.status === "pending") return [t`${fg(theme.dim)("this step did not run or write a report")}`]
       const done = phase.status === "completed" || phase.status === "failed"
       return [t`${fg(theme.dim)(done ? "this step wrote no report" : "no report yet — it appears once the step finishes")}`]
     }
 
     const wrapped = wrapLines(report, Math.max(20, width))
-    const maxScroll = Math.max(0, wrapped.length - visible)
-    this.reportScroll = Math.max(0, Math.min(this.reportScroll, maxScroll))
-    this.contentPosition = scrollPosition(this.reportScroll, maxScroll)
-    return wrapped.slice(this.reportScroll, this.reportScroll + visible).map(styleSummaryLine)
+    return wrapped.map(styleSummaryLine)
   }
 
   // The logs tab: the focused phase's activity, newest first. Scoped to one
@@ -1704,14 +1877,18 @@ export class TuiProgress implements ProgressUI {
     this.contentPosition = ""
     if (visible <= 0) return []
     if (!phase) return [t`${fg(theme.dim)("no step selected")}`]
+    const lines = this.phaseFeedSourceLines(phase, width)
+    const maxScroll = Math.max(0, lines.length - visible)
+    this.logScroll = Math.max(0, Math.min(this.logScroll, maxScroll))
+    this.contentPosition = scrollPosition(this.logScroll, maxScroll)
+    return lines.slice(this.logScroll, this.logScroll + visible)
+  }
+
+  private phaseFeedSourceLines(phase: PhaseState, width: number): StyledText[] {
     const events = this.feed.filter((entry) => entry.phase === phase.name).reverse()
     if (events.length === 0) return [t`${fg(theme.dim)("no activity for this step yet…")}`]
 
-    const maxScroll = Math.max(0, events.length - visible)
-    this.logScroll = Math.max(0, Math.min(this.logScroll, maxScroll))
-    this.contentPosition = scrollPosition(this.logScroll, maxScroll)
-
-    return events.slice(this.logScroll, this.logScroll + visible).map((entry) => {
+    return events.map((entry) => {
       const style = kindStyle(entry.kind)
       return new StyledText([
         fg(theme.faint)(formatTime(entry.time)),
@@ -1721,6 +1898,72 @@ export class TuiProgress implements ProgressUI {
         fg(entry.kind === "error" ? theme.red : theme.text)(truncate(entry.message, Math.max(20, width - 12))),
       ])
     })
+  }
+
+  // A selected group compares each concrete child in an adaptive card grid:
+  // side-by-side when there is room, stacked when the terminal is narrow. The
+  // active tab determines the body of every card, so session/report/log content
+  // can be scanned across models without cloning the entire dashboard chrome.
+  private groupContentLines(
+    selection: GroupSelection,
+    members: PhaseState[],
+    now: number,
+    width: number,
+    visible: number,
+  ): StyledText[] {
+    this.contentPosition = ""
+    if (visible <= 0) return []
+
+    const gap = 2
+    const columnCount = comparisonColumnCount(width, members.length)
+    const cardWidth = Math.max(20, Math.floor((width - gap * (columnCount - 1)) / columnCount))
+    // Group selection is intentionally a comparison summary. A child row opens
+    // the unabridged tab, while each card keeps a bounded preview so one verbose
+    // model cannot push every sibling off screen.
+    const previewRows = Math.max(1, Math.min(8, visible - 2))
+    const allLines: StyledText[] = []
+
+    for (let start = 0; start < members.length; start += columnCount) {
+      const rowMembers = members.slice(start, start + columnCount)
+      const cards = rowMembers.map((phase) => this.comparisonCardLines(selection, phase, now, cardWidth, previewRows))
+      const rowHeight = Math.max(...cards.map((card) => card.length))
+      for (let row = 0; row < rowHeight; row++) {
+        allLines.push(mergeComparisonRow(cards.map((card) => card[row]), cardWidth, gap))
+      }
+      if (start + columnCount < members.length) allLines.push(plain(""))
+    }
+
+    const maxScroll = Math.max(0, allLines.length - visible)
+    this.groupScroll = Math.max(0, Math.min(this.groupScroll, maxScroll))
+    this.contentPosition = scrollPosition(this.groupScroll, maxScroll)
+    return allLines.slice(this.groupScroll, this.groupScroll + visible)
+  }
+
+  private comparisonCardLines(
+    selection: GroupSelection,
+    phase: PhaseState,
+    now: number,
+    width: number,
+    previewRows: number,
+  ): StyledText[] {
+    const baseLabel = selection.stepName === undefined ? phaseDisplayName(phase) : modelLabel(phase)
+    const label = phase.plannedVariant ? `${baseLabel}#${phase.plannedVariant}` : baseLabel
+    const right = phaseMetaChunks(phase, now)
+    const labelBudget = Math.max(6, width - plainLen(right) - 8)
+    const header = padBetween(
+      [statusIcon(phase.status, now), raw(" "), bold(fg(theme.text)(truncate(label, labelBudget)))],
+      right,
+      width,
+    )
+    const divider = t`${fg(theme.faint)("─".repeat(width))}`
+    const body =
+      this.contentTab === "reports"
+        ? this.reportSourceLines(phase, width)
+        : this.contentTab === "session"
+          ? this.sessionSourceLines(phase, width)
+          : this.phaseFeedSourceLines(phase, width)
+    const preview = this.contentTab === "session" ? body.slice(-previewRows) : body.slice(0, previewRows)
+    return [header, divider, ...preview]
   }
 
   // The tab strip that owns rows 0-1 of the content panel: a label row
@@ -1786,6 +2029,17 @@ export class TuiProgress implements ProgressUI {
     this.contentPosition = ""
     if (visible <= 0) return []
     if (!phase) return [t`${fg(theme.dim)("no active session yet — waiting for a phase to start…")}`]
+    const lines = this.sessionSourceLines(phase, width)
+    const maxScroll = Math.max(0, lines.length - visible)
+    this.sessionScroll = Math.max(0, Math.min(this.sessionScroll, maxScroll))
+    const topOffset = maxScroll - this.sessionScroll
+    this.contentPosition = scrollPosition(topOffset, maxScroll)
+    // Measured from the bottom: 0 tails the live stream, scrolling up (keys or
+    // wheel, focused or not) holds a position in history until scrolled back.
+    return lines.slice(topOffset, topOffset + visible)
+  }
+
+  private sessionSourceLines(phase: PhaseState, width: number): StyledText[] {
 
     const blocks = this.transcripts.get(phase.name) ?? []
     if (blocks.length === 0) {
@@ -1807,13 +2061,7 @@ export class TuiProgress implements ProgressUI {
       const live = running && index === blocks.length - 1
       lines.push(...transcriptBlockLines(block, width, live))
     })
-    const maxScroll = Math.max(0, lines.length - visible)
-    this.sessionScroll = Math.max(0, Math.min(this.sessionScroll, maxScroll))
-    const topOffset = maxScroll - this.sessionScroll
-    this.contentPosition = scrollPosition(topOffset, maxScroll)
-    // Measured from the bottom: 0 tails the live stream, scrolling up (keys or
-    // wheel, focused or not) holds a position in history until scrolled back.
-    return lines.slice(topOffset, topOffset + visible)
+    return lines
   }
 
   private footerContent(now: number, width: number) {
@@ -1833,21 +2081,35 @@ export class TuiProgress implements ProgressUI {
         const right: TextChunk[] = [fg(theme.faint)(this.runID ? `run ${this.runID}` : "run …")]
         return padBetween(left, right, width)
       }
-      const left: TextChunk[] = [
-        fg(theme.dim)("["),
-        fg(theme.accent)("↑↓"),
-        fg(theme.dim)("] step · ["),
-        fg(theme.accent)("enter"),
-        fg(theme.dim)("] read · ["),
-        fg(theme.accent)("←→"),
-        fg(theme.dim)("] tab · ["),
-        fg(theme.accent)("o"),
-        fg(theme.dim)("] session · ["),
-        fg(theme.accent)("g"),
-        fg(theme.dim)("] lazygit · ["),
-        fg(theme.accent)("q"),
-        fg(theme.dim)("] close"),
-      ]
+      const left: TextChunk[] = this.selectedGroup
+        ? [
+            fg(theme.dim)("["),
+            fg(theme.accent)("↑↓"),
+            fg(theme.dim)("] node · ["),
+            fg(theme.accent)("enter"),
+            fg(theme.dim)("] read · ["),
+            fg(theme.accent)("←→"),
+            fg(theme.dim)("] tab · select a child for session · ["),
+            fg(theme.accent)("g"),
+            fg(theme.dim)("] lazygit · ["),
+            fg(theme.accent)("q"),
+            fg(theme.dim)("] close"),
+          ]
+        : [
+            fg(theme.dim)("["),
+            fg(theme.accent)("↑↓"),
+            fg(theme.dim)("] step · ["),
+            fg(theme.accent)("enter"),
+            fg(theme.dim)("] read · ["),
+            fg(theme.accent)("←→"),
+            fg(theme.dim)("] tab · ["),
+            fg(theme.accent)("o"),
+            fg(theme.dim)("] session · ["),
+            fg(theme.accent)("g"),
+            fg(theme.dim)("] lazygit · ["),
+            fg(theme.accent)("q"),
+            fg(theme.dim)("] close"),
+          ]
       const right: TextChunk[] = [fg(theme.faint)(this.runID ? `run ${this.runID}` : "run …")]
       return padBetween(left, right, width)
     }
@@ -1902,7 +2164,19 @@ export class TuiProgress implements ProgressUI {
           fg(theme.yellow)("ctrl+c"),
           fg(theme.dim)(" abort"),
         ]
-      : [
+      : this.selectedGroup
+        ? [
+            fg(theme.dim)("["),
+            fg(theme.accent)("↑↓"),
+            fg(theme.dim)("] node · ["),
+            fg(theme.accent)("enter"),
+            fg(theme.dim)("] read · ["),
+            fg(theme.accent)("←→"),
+            fg(theme.dim)("] tab · select a child for OpenCode · "),
+            fg(theme.yellow)("ctrl+c"),
+            fg(theme.dim)(" abort"),
+          ]
+        : [
           fg(theme.dim)("["),
           fg(theme.accent)("↑↓"),
           fg(theme.dim)("] step · ["),
@@ -2096,21 +2370,26 @@ function wrapWords(text: string, width: number): string[] {
   const words = text.replace(/\s+/g, " ").trim().split(" ")
   const lines: string[] = []
   let current = ""
-  for (let word of words) {
-    while (word.length > width) {
+  for (const word of words) {
+    const pieces = wrapLines([word], width)
+    if (pieces.length > 1) {
       if (current) {
         lines.push(current)
         current = ""
       }
-      lines.push(word.slice(0, width))
-      word = word.slice(width)
+      lines.push(...pieces.slice(0, -1))
+      const last = pieces[pieces.length - 1]!
+      if (displayWidth(last) >= width) lines.push(last)
+      else current = last
+      continue
     }
-    if (!word) continue
-    if (!current) current = word
-    else if (current.length + 1 + word.length <= width) current += ` ${word}`
+    const piece = pieces[0] ?? ""
+    if (!piece) continue
+    if (!current) current = piece
+    else if (displayWidth(current) + 1 + displayWidth(piece) <= width) current += ` ${piece}`
     else {
       lines.push(current)
-      current = word
+      current = piece
     }
   }
   if (current) lines.push(current)
@@ -2141,10 +2420,87 @@ function phaseElapsed(phase: PhaseState, now: number): number | undefined {
   return phase.restoredDurationMs ?? (phase.startedAt !== undefined ? (phase.endedAt ?? now) - phase.startedAt : undefined)
 }
 
+// Keyboard and mouse navigation follow the rendered tree, including group
+// headers. Exported as a pure helper so its ordering cannot silently drift from
+// the interaction model.
+export function pipelineSelectionTargets(phases: readonly ProgressPhase[]): PipelineSelectionTarget[] {
+  const targets: PipelineSelectionTarget[] = []
+  for (const group of groupPhases(phases)) {
+    if (group.length === 1) {
+      targets.push({ kind: "phase", name: group[0]!.name })
+      continue
+    }
+
+    const groupId = group[0]!.groupId!
+    const stepGroups = chunkByStepName(group)
+    if (stepGroups.length === 1) {
+      targets.push({ kind: "group", groupId, stepName: stepLabel(group[0]!) })
+      targets.push(...group.map((phase) => ({ kind: "phase" as const, name: phase.name })))
+      continue
+    }
+
+    targets.push({ kind: "group", groupId })
+    for (const members of stepGroups) {
+      if (members.length === 1) targets.push({ kind: "phase", name: members[0]!.name })
+      else {
+        targets.push({ kind: "group", groupId, stepName: stepLabel(members[0]!) })
+        targets.push(...members.map((phase) => ({ kind: "phase" as const, name: phase.name })))
+      }
+    }
+  }
+  return targets
+}
+
+function samePipelineTarget(left: PipelineSelectionTarget, right: PipelineSelectionTarget): boolean {
+  if (left.kind !== right.kind) return false
+  if (left.kind === "phase" && right.kind === "phase") return left.name === right.name
+  return left.kind === "group" && right.kind === "group" && left.groupId === right.groupId && left.stepName === right.stepName
+}
+
+// At least 28 cells keeps each comparison lane readable. More than three
+// simultaneous lanes becomes harder to scan than a second row of cards.
+export function comparisonColumnCount(width: number, itemCount: number): number {
+  const byWidth = Math.max(1, Math.floor((Math.max(1, width) + 2) / 30))
+  return Math.max(1, Math.min(Math.max(1, itemCount), 3, byWidth))
+}
+
+function mergeComparisonRow(lines: Array<StyledText | undefined>, width: number, gap: number): StyledText {
+  const chunks: TextChunk[] = []
+  lines.forEach((line, index) => {
+    if (index > 0) chunks.push(raw(" ".repeat(gap)))
+    const fitted = fitTextChunks(line?.chunks ?? [], width)
+    chunks.push(...fitted.chunks)
+    if (fitted.length < width) chunks.push(raw(" ".repeat(width - fitted.length)))
+  })
+  return new StyledText(chunks)
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+function fitTextChunks(chunks: readonly TextChunk[], width: number): { chunks: TextChunk[]; length: number } {
+  const out: TextChunk[] = []
+  let length = 0
+  for (const chunk of chunks) {
+    if (length >= width) break
+    let text = ""
+    for (const part of graphemeSegmenter.segment(chunk.text)) {
+      const partWidth = displayWidth(part.segment)
+      if (length + partWidth > width) {
+        if (text) out.push({ ...chunk, text })
+        return { chunks: out, length }
+      }
+      text += part.segment
+      length += partWidth
+    }
+    if (text) out.push({ ...chunk, text })
+  }
+  return { chunks: out, length }
+}
+
 // Consecutive phases sharing a defined groupId form one concurrent group; a
 // human gate (no groupId) or a plain sequential step is a group of one.
-function groupPhases(phases: readonly PhaseState[]): PhaseState[][] {
-  const groups: PhaseState[][] = []
+function groupPhases<T extends Pick<ProgressPhase, "groupId">>(phases: readonly T[]): T[][] {
+  const groups: T[][] = []
   for (const phase of phases) {
     const last = groups[groups.length - 1]
     if (phase.groupId && last && last[0]!.groupId === phase.groupId) last.push(phase)
@@ -2155,8 +2511,8 @@ function groupPhases(phases: readonly PhaseState[]): PhaseState[][] {
 
 // Splits a group into its distinct logical steps: a pure `models:` fan-out is
 // one step (every member shares a stepName), a `parallel:` block is several.
-function chunkByStepName(group: readonly PhaseState[]): PhaseState[][] {
-  const chunks: PhaseState[][] = []
+function chunkByStepName<T extends Pick<ProgressPhase, "name" | "stepName">>(group: readonly T[]): T[][] {
+  const chunks: T[][] = []
   for (const phase of group) {
     const last = chunks[chunks.length - 1]
     if (last && stepLabel(last[0]!) === stepLabel(phase)) last.push(phase)
@@ -2168,9 +2524,7 @@ function chunkByStepName(group: readonly PhaseState[]): PhaseState[][] {
 // Column count of a chunk list. The pipeline tree uses only single-cell
 // glyphs (icons, box-drawing, ASCII), so a codepoint count is the cell width.
 function plainLen(chunks: readonly TextChunk[]): number {
-  let count = 0
-  for (const chunk of chunks) for (const _ of chunk.text) count++
-  return count
+  return chunks.reduce((count, chunk) => count + displayWidth(chunk.text), 0)
 }
 
 // Box-drawing prefix for a tree row: one entry per ancestor level, true when
@@ -2190,6 +2544,21 @@ function groupStatus(members: readonly PhaseState[]): PhaseStatus {
   if (members.some((m) => m.status === "failed")) return "failed"
   if (members.every((m) => m.status === "skipped")) return "skipped"
   return "completed"
+}
+
+function groupStatusLabel(status: PhaseStatus): string {
+  switch (status) {
+    case "running":
+      return "running"
+    case "completed":
+      return "done"
+    case "failed":
+      return "failed"
+    case "skipped":
+      return "skipped"
+    default:
+      return "scheduled"
+  }
 }
 
 // Aggregate meta for a group header: wall-clock is the longest member (they
@@ -2217,7 +2586,7 @@ function phaseNameChunk(text: string, status: PhaseStatus, selected: boolean): T
 
 // The logical (pre-fan-out) name of a phase; equals its own name for a plain
 // sequential step or a human gate.
-function stepLabel(phase: PhaseState): string {
+function stepLabel(phase: Pick<ProgressPhase, "name" | "stepName">): string {
   return phase.stepName ?? phase.name
 }
 

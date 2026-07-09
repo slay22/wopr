@@ -56,7 +56,7 @@ export async function openRunDashboard(runID: string): Promise<void> {
       resolveDetached()
     },
     undefined,
-    { offlineSessions: !server, observer: true },
+    { offlineSessions: !server, observer: true, mode: server ? "live" : "historical" },
   )
   tui.start(runID, targetDir, dir)
 

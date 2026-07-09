@@ -1,13 +1,22 @@
 import { describe, expect, test } from "bun:test"
 
 import type { CliRenderer } from "@opentui/core"
-import { paletteForMode, paletteForTerminal, terminalBackgroundHex } from "../src/tui-theme"
+import { displayWidth, paletteForMode, paletteForTerminal, terminalBackgroundHex, truncate, wrapLines } from "../src/tui-theme"
 
 // terminalBackgroundHex reaches into opentui internals; the adapter must read a
 // real reply but degrade to undefined (→ static palettes) on any shape change.
 const fakeRenderer = (themeModeState: unknown) => ({ themeModeState }) as unknown as CliRenderer
 
 describe("palette derivation from the terminal background", () => {
+  test("measures wide and combined graphemes in terminal cells", () => {
+    expect(displayWidth("ascii")).toBe(5)
+    expect(displayWidth("界🙂é")).toBe(5)
+    expect(displayWidth("👨‍👩‍👧‍👦")).toBe(2)
+    expect(truncate("界界界", 5)).toBe("界界…")
+    expect(wrapLines(["界界a"], 3)).toEqual(["界", "界a"])
+    expect(wrapLines(["éé"], 1)).toEqual(["é", "é"])
+  })
+
   test("dark background: transparent canvas, borders lifted toward white, overlay repaints the terminal", () => {
     const palette = paletteForTerminal("dark", "#1a1b26")
 
