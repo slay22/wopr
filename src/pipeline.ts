@@ -9,7 +9,7 @@ const fallbackModel = `${defaultGptModel}#${defaultGptVariant}`
 
 /** Models the built-in review/refine pipelines fan their audits across; a project can override per step. */
 const sonnetModel = "openrouter/anthropic/claude-sonnet-5"
-/** Lower-cost replacement for the GPT xhigh phases in the lightweight implementation pipeline. */
+/** Lower-cost replacement for the GPT xhigh phases in the lightweight pipelines. */
 const glmModel = "openrouter/z-ai/glm-5.2"
 
 /** Legacy reserved step keyword: pauses the pipeline for a manual human gate. */
@@ -242,6 +242,21 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
           { agent: "clean-code-auditor", name: "clean-code", models: [fallbackModel, defaultOpusModel], reports: ["scope"] },
           { agent: "security-reviewer", name: "security", models: [fallbackModel, defaultOpusModel], reports: ["scope"] },
           { agent: "bug-auditor", name: "bugs", models: [fallbackModel, defaultOpusModel], reports: ["scope"] },
+        ],
+      },
+      { agent: "review-report", name: "report", model: defaultOpusModel, reports: "all" },
+    ],
+  },
+  "review-lite": {
+    description:
+      "Like review, but swaps ChatGPT 5.5 xhigh for GLM 5.2 in scope and the audit fan-out; the report and the parallel audit slot keep Opus.",
+    steps: [
+      { agent: "review-scope", name: "scope", model: glmModel, reports: "none", diff: true },
+      {
+        parallel: [
+          { agent: "clean-code-auditor", name: "clean-code", models: [glmModel, defaultOpusModel], reports: ["scope"] },
+          { agent: "security-reviewer", name: "security", models: [glmModel, defaultOpusModel], reports: ["scope"] },
+          { agent: "bug-auditor", name: "bugs", models: [glmModel, defaultOpusModel], reports: ["scope"] },
         ],
       },
       { agent: "review-report", name: "report", model: defaultOpusModel, reports: "all" },

@@ -192,6 +192,7 @@ defaults:
 #   refine               audit the current diff, then apply the triaged fixes (changes code)
 #   ultra-refine         like refine, with every audit fanned out across two models
 #   review               report-only: parallel audits across two models plus one prioritized report (no changes)
+#   review-lite          like review, but swaps ChatGPT 5.5 xhigh for GLM 5.2 (scope + audit fan-out); report stays on Opus
 # The default \`implement\` pipeline is inlined below as an editable starting point; redefining a name here overrides the built-in.
 pipelines:
   implement:

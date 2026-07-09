@@ -134,12 +134,12 @@ describe("built-in implement-lite pipeline", () => {
     expect(byName.adversarial).toMatchObject({ model: "anthropic/claude-opus-4-8" })
   })
 
-  test("keeps GLM 5.2 scoped to the implementation pipelines", () => {
+  test("keeps GLM 5.2 scoped to the implementation and lite pipelines", () => {
     const glmPipelines = Object.entries(builtInPipelines)
       .filter(([, spec]) => JSON.stringify(spec).includes("openrouter/z-ai/glm-5.2"))
       .map(([name]) => name)
 
-    expect(glmPipelines).toEqual(["implement", "implement-lite"])
+    expect(glmPipelines).toEqual(["implement", "implement-lite", "review-lite"])
   })
 })
 
@@ -176,6 +176,48 @@ describe("built-in review pipeline", () => {
       "reports/security__openai-gpt-5-5-xhigh.md",
       "reports/security__anthropic-claude-opus-4-8.md",
       "reports/bugs__openai-gpt-5-5-xhigh.md",
+      "reports/bugs__anthropic-claude-opus-4-8.md",
+    ])
+  })
+})
+
+describe("built-in review-lite pipeline", () => {
+  const reviewLite = () => resolvePipeline({ name: "review-lite", spec: builtInPipelines["review-lite"]!, agents: builtInAgents })
+
+  test("is report-only: every step is read-only and there is no human gate", () => {
+    const pipeline = reviewLite()
+    const agents = pipeline.steps.filter((step): step is AgentStep => step.type === "agent")
+    expect(agents.length).toBeGreaterThan(0)
+    expect(agents.every((step) => step.readOnly)).toBe(true)
+    expect(pipeline.steps.some((step) => step.type === "human")).toBe(false)
+  })
+
+  test("swaps scope and the first audit slot to GLM 5.2 while keeping opus for the second slot and the report", () => {
+    const pipeline = reviewLite()
+    expect(stepNames(pipeline)).toEqual([
+      "scope",
+      "clean-code__openrouter-z-ai-glm-5-2",
+      "clean-code__anthropic-claude-opus-4-8",
+      "security__openrouter-z-ai-glm-5-2",
+      "security__anthropic-claude-opus-4-8",
+      "bugs__openrouter-z-ai-glm-5-2",
+      "bugs__anthropic-claude-opus-4-8",
+      "report",
+    ])
+
+    const byName = Object.fromEntries(
+      pipeline.steps.filter((step): step is AgentStep => step.type === "agent").map((step) => [step.name, step]),
+    )
+    expect(byName.scope?.model).toBe("openrouter/z-ai/glm-5.2")
+    expect(byName.report?.model).toBe("anthropic/claude-opus-4-8")
+    expect(byName.report?.inputFiles).toEqual([
+      "prd.md",
+      "reports/scope.md",
+      "reports/clean-code__openrouter-z-ai-glm-5-2.md",
+      "reports/clean-code__anthropic-claude-opus-4-8.md",
+      "reports/security__openrouter-z-ai-glm-5-2.md",
+      "reports/security__anthropic-claude-opus-4-8.md",
+      "reports/bugs__openrouter-z-ai-glm-5-2.md",
       "reports/bugs__anthropic-claude-opus-4-8.md",
     ])
   })
