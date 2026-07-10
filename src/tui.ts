@@ -1435,12 +1435,15 @@ export class TuiProgress implements ProgressUI {
 
     // Auto-follow the active phase until the user takes over navigation; after
     // that the selection stays put so any step (past, present, scheduled) can
-    // be inspected without the live run yanking focus away.
+    // be inspected without the live run yanking focus away. Concurrent phases
+    // interleave their events, so when the active phase belongs to a
+    // multi-member group, follow the group's header instead of whichever
+    // member emitted last — otherwise focus ping-pongs between the children.
     if (!this.finished && !this.manualFocus) {
       const activeIndex = this.phases.findIndex((phase) => phase.name === this.activePhase)
       if (activeIndex >= 0) {
         this.selected = activeIndex
-        this.selectedGroup = undefined
+        this.selectedGroup = autoFollowGroup(this.phases, this.phases[activeIndex]!)
       }
     }
     const group = this.focusedGroup()
@@ -2449,6 +2452,20 @@ export function pipelineSelectionTargets(phases: readonly ProgressPhase[]): Pipe
     }
   }
   return targets
+}
+
+// The tree node auto-follow should rest on for an active phase: the top header
+// of its concurrent group (the `parallel` header for a block of distinct
+// steps, the step header for a pure `models:` fan-out), or undefined for a
+// phase that runs alone. Exported for the same reason as
+// pipelineSelectionTargets: it must not drift from the rendered tree.
+export function autoFollowGroup(phases: readonly ProgressPhase[], active: Pick<ProgressPhase, "name" | "stepName" | "groupId">): GroupSelection | undefined {
+  if (!active.groupId) return undefined
+  const members = phases.filter((phase) => phase.groupId === active.groupId)
+  if (members.length < 2) return undefined
+  return chunkByStepName(members).length === 1
+    ? { kind: "group", groupId: active.groupId, stepName: stepLabel(active) }
+    : { kind: "group", groupId: active.groupId }
 }
 
 function samePipelineTarget(left: PipelineSelectionTarget, right: PipelineSelectionTarget): boolean {
