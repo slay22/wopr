@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 
-import { autoFollowGroup, comparisonColumnCount, initialContentTab, pipelineSelectionTargets } from "../src/tui"
+import { autoFollowGroup, comparisonColumnCount, initialContentTab, limitsRow, pipelineSelectionTargets } from "../src/tui"
 
+import type { LimitsSnapshot } from "../src/limits"
 import type { ProgressPhase } from "../src/progress"
 
 describe("run dashboard defaults", () => {
@@ -12,6 +13,62 @@ describe("run dashboard defaults", () => {
     expect(live).toBe("session")
     expect(historical).toBe("reports")
     expect([live, historical]).not.toContain("logs")
+  })
+})
+
+describe("header limits row", () => {
+  const now = Date.now()
+  const full: LimitsSnapshot = {
+    gpt: { sessionPct: 42, sessionResetsAt: now + 130 * 60_000, weeklyPct: 18 },
+    openrouter: { kind: "remaining", amount: 12.34 },
+    fetchedAt: now,
+  }
+  const text = (snapshot: LimitsSnapshot | undefined, width: number) =>
+    limitsRow(snapshot, now, width)
+      .chunks.map((chunk) => chunk.text)
+      .join("")
+
+  test("wide row shows the bar, reset countdown, weekly percent, and credits", () => {
+    const row = text(full, 100)
+
+    expect(row).toContain("GPT ")
+    expect(row).toContain("█")
+    expect(row).toContain("42%")
+    expect(row).toContain("resets 2h 10m")
+    expect(row).toContain("wk 18%")
+    expect(row).toContain("OR $12.34 left")
+    expect(row.length).toBeGreaterThanOrEqual(100)
+  })
+
+  test("narrow widths drop weekly first, then the countdown", () => {
+    // Bar segment (18) + countdown (16) + weekly (9) + credits (14+1 gap):
+    // at 50 the weekly text no longer fits, at 40 the countdown goes too.
+    const at50 = text(full, 50)
+    expect(at50).toContain("resets")
+    expect(at50).not.toContain("wk 18%")
+
+    const at40 = text(full, 40)
+    expect(at40).toContain("42%")
+    expect(at40).not.toContain("resets")
+    expect(at40).toContain("OR $12.34 left")
+  })
+
+  test("monthly fallback labels the amount as spend, not balance", () => {
+    const row = text({ ...full, openrouter: { kind: "monthly", amount: 4.2 } }, 100)
+
+    expect(row).toContain("OR $4.20/mo")
+  })
+
+  test("auth problems surface a dim hint instead of a meter", () => {
+    const row = text({ gptHint: "codex login", fetchedAt: now }, 80)
+
+    expect(row).toContain("GPT — codex login")
+    expect(row).not.toContain("█")
+  })
+
+  test("no data renders a quiet placeholder, never a crash", () => {
+    expect(text(undefined, 80)).toBe("…")
+    expect(text({ fetchedAt: now }, 80)).toBe("…")
   })
 })
 

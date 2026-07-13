@@ -248,6 +248,17 @@ export function formatAgo(ms: number) {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s ago`
 }
 
+/** "2d 3h" / "2h 10m" / "12m" — countdown until a quota window resets. */
+export function fmtCountdown(resetsAt: number, now: number) {
+  const totalMinutes = Math.max(0, Math.floor((resetsAt - now) / 60_000))
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
 export function formatTime(time: number) {
   return new Date(time).toLocaleTimeString("en-GB", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
 }

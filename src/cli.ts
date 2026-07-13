@@ -3,10 +3,12 @@ import { resolve } from "node:path"
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type ArcherDefaults } from "./config"
 import { detectBaseRef } from "./git"
+import { openRouterKeySources } from "./limits"
 import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
+import { deleteKeychainSecret, keychainAvailable, storeKeychainSecret } from "./secrets"
 import type { Pipeline, RunOptions } from "./types"
 import { isValidRunID } from "./workspace"
 
@@ -57,6 +59,7 @@ export type CliCommand =
   | { type: "runs"; runID?: string }
   | { type: "config"; targetDir: string }
   | { type: "init"; options: InitOptions }
+  | { type: "auth"; provider: "openrouter"; action: "set" | "remove" | "status" }
 
 export async function parseAndRun(argv: string[]) {
   if (argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
@@ -75,6 +78,10 @@ export async function parseAndRun(argv: string[]) {
   }
   if (command.type === "config") {
     await openConfigEditor(command.targetDir)
+    return
+  }
+  if (command.type === "auth") {
+    await runAuthCommand(command.action)
     return
   }
   if (command.type === "init") {
@@ -160,7 +167,50 @@ async function resumeOptions(runID: string, targetDir?: string): Promise<RunOpti
   return { ...(await resolveRunOptions(parsed)), prompt: "" }
 }
 
+/**
+ * The management key never touches archer's argv, env, or disk: `security`
+ * itself prompts for the value and the status report only says which sources
+ * exist, never what they contain.
+ */
+async function runAuthCommand(action: "set" | "remove" | "status") {
+  if (action === "status") {
+    const sources = await openRouterKeySources()
+    const lines = [
+      "openrouter key sources (in precedence order):",
+      `  keychain (archer auth openrouter)  ${sources.keychain ? "configured — exact /credits balance" : "not set"}`,
+      `  env OPENROUTER_API_KEY             ${sources.env ? "set" : "not set"}`,
+      `  opencode auth.json                 ${sources.opencode ? "present" : "not found"}`,
+    ]
+    if (!sources.keychain) lines.push("  without a management key the header meter falls back to /key (key limit or monthly spend)")
+    process.stdout.write(`${lines.join("\n")}\n`)
+    return
+  }
+  if (action === "remove") {
+    const removed = await deleteKeychainSecret("openrouter")
+    process.stdout.write(removed ? "removed the openrouter key from the keychain\n" : "no openrouter key in the keychain\n")
+    return
+  }
+  if (!keychainAvailable()) {
+    throw new Error("the keychain is only available on macOS; set OPENROUTER_API_KEY in the environment instead")
+  }
+  process.stdout.write('storing the OpenRouter management key in the macOS Keychain (service "archer"):\n')
+  const stored = await storeKeychainSecret("openrouter")
+  if (!stored) throw new Error("security add-generic-password failed; the key was not stored")
+  process.stdout.write("openrouter key stored — the run header will show the exact credit balance\n")
+}
+
 export async function parseCommand(argv: string[]): Promise<CliCommand> {
+  if (argv[0] === "auth") {
+    const rest = argv.slice(1)
+    if (rest.length === 0 || (rest.length === 1 && rest[0] === "status")) {
+      return { type: "auth", provider: "openrouter", action: "status" }
+    }
+    if (rest[0] === "openrouter") {
+      if (rest.length === 1) return { type: "auth", provider: "openrouter", action: "set" }
+      if (rest.length === 2 && rest[1] === "--remove") return { type: "auth", provider: "openrouter", action: "remove" }
+    }
+    throw new Error("usage: archer auth [status] | archer auth openrouter [--remove]")
+  }
   if (argv[0] === "runs") {
     const rest = argv.slice(1)
     if (rest.length > 1) throw new Error("usage: archer runs [run-id]")
@@ -463,6 +513,7 @@ Usage:
   archer init
   archer runs [run-id]
   archer config
+  archer auth openrouter
 
 Commands:
   archer                   Open an interactive TUI launcher to pick a pipeline,
@@ -472,6 +523,8 @@ Commands:
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.archer/runs)
   config                   View and edit the global (~/.archer) and current project config in a TUI
+  auth openrouter          Store an OpenRouter management key in the macOS Keychain for the
+                           header credits meter (--remove deletes it; "auth status" lists sources)
 
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file

@@ -12,10 +12,12 @@ import {
   t,
 } from "@opentui/core"
 
+import { startLimitsPoller } from "./limits"
 import { log } from "./log"
 import { openOpencodeSessionWindow, openStoredSessionWindow } from "./opencode"
 import { PhaseUsage, addTokens, emptyTokens } from "./usage"
 import {
+  fmtCountdown,
   formatAgo,
   formatCount,
   formatElapsed,
@@ -42,6 +44,7 @@ import {
 } from "./tui-theme"
 
 import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
+import type { LimitsSnapshot } from "./limits"
 import type { PaletteColor, PhaseStatus } from "./tui-theme"
 import type {
   ActivityKind,
@@ -241,6 +244,10 @@ export class TuiProgress implements ProgressUI {
   // via phaseMessage and repainted on the ticker, not per delta.
   private readonly transcripts = new Map<string, TranscriptBlock[]>()
   private readonly ticker: ReturnType<typeof setInterval>
+  // Subscription meters (GPT windows, OpenRouter credits) polled in the
+  // background; the 250ms ticker just repaints whatever the last poll left.
+  private readonly stopLimits: () => void
+  private limits?: LimitsSnapshot
   private readonly dirText: TextRenderable
   private readonly headerText: TextRenderable
   private readonly pipelineBox: BoxRenderable
@@ -520,7 +527,8 @@ export class TuiProgress implements ProgressUI {
     })
 
     // The working directory sits above the header as a bare line, outside the
-    // bordered box, so the header itself stays a single clean row of totals.
+    // bordered box, so the header holds just the run totals row and the
+    // subscription-meter row beneath it.
     const dirLine = new TextRenderable(renderer, {
       id: "archer-dir",
       content: "",
@@ -531,7 +539,7 @@ export class TuiProgress implements ProgressUI {
 
     const header = this.panel({
       id: "archer-header",
-      height: 3,
+      height: 4,
       borderColor: theme.border,
       backgroundColor: theme.bg,
     })
@@ -737,6 +745,9 @@ export class TuiProgress implements ProgressUI {
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
+    this.stopLimits = startLimitsPoller((snapshot) => {
+      this.limits = snapshot
+    })
     this.render()
   }
 
@@ -1168,6 +1179,7 @@ export class TuiProgress implements ProgressUI {
 
   stop() {
     clearInterval(this.ticker)
+    this.stopLimits()
     log.mute(false)
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.off("theme_mode", this.handleThemeMode)
@@ -1428,10 +1440,10 @@ export class TuiProgress implements ProgressUI {
     const now = Date.now()
     const innerWidth = Math.max(40, this.renderer.width - 6)
     const rightWidth = Math.max(40, this.renderer.width - pipelineWidth - 9)
-    // Body rows left after the dir line (1), header (3), and footer (3); the
+    // Body rows left after the dir line (1), header (4), and footer (3); the
     // detail and todos panels grow with their content but never starve the
     // content panel below them.
-    const bodyHeight = Math.max(8, this.renderer.height - 7)
+    const bodyHeight = Math.max(8, this.renderer.height - 8)
 
     // Auto-follow the active phase until the user takes over navigation; after
     // that the selection stays put so any step (past, present, scheduled) can
@@ -1497,8 +1509,9 @@ export class TuiProgress implements ProgressUI {
     this.renderer.requestRender()
   }
 
-  // Header owns the session-wide totals in a single row: clock, elapsed time,
-  // cost, and tokens. Phase status lives in the pipeline panel.
+  // Header owns the session-wide totals (clock, elapsed time, cost, tokens)
+  // with the subscription meters on the row beneath. Phase status lives in
+  // the pipeline panel.
   private headerContent(now: number, width: number) {
     const usage = totalUsage(this.phases)
     // The clock and elapsed time freeze at the moment the run ended.
@@ -1519,7 +1532,7 @@ export class TuiProgress implements ProgressUI {
         this.finished.status === "completed" ? bold(fg(theme.green)("✓ run completed")) : bold(fg(theme.red)("✗ run failed")),
       )
     }
-    return padBetween(title, totals, width)
+    return joinLines([padBetween(title, totals, width), limitsRow(this.limits, now, width)])
   }
 
   // The working directory renders above the header box, outside its border.
@@ -2671,4 +2684,57 @@ function totalUsage(phases: PhaseState[]) {
     (usage, phase) => ({ cost: usage.cost + phase.cost, tokens: addTokens(usage.tokens, phase.tokens) }),
     { cost: 0, tokens: emptyTokens() },
   )
+}
+
+/**
+ * Second header row: the GPT subscription meter (5h session as a bar, weekly
+ * as text) on the left, the OpenRouter credit balance on the right. Account-
+ * level data, so it reads the same for live runs and reopened dashboards.
+ * Exported for the width-degradation tests.
+ */
+export function limitsRow(limits: LimitsSnapshot | undefined, now: number, width: number): StyledText {
+  const right: TextChunk[] = []
+  const openrouter = limits?.openrouter
+  if (openrouter) {
+    right.push(
+      fg(theme.dim)("OR "),
+      fg(theme.text)(openrouter.kind === "remaining" ? `${formatMoney(openrouter.amount)} left` : `${formatMoney(openrouter.amount)}/mo`),
+    )
+  }
+
+  const gpt = limits?.gpt
+  if (!gpt) {
+    // Never an empty line: a placeholder keeps the row's cell real while the
+    // first poll is in flight (and an all-empty trailing line would let the
+    // text layout collapse to a single row).
+    const left: TextChunk[] = limits?.gptHint ? [fg(theme.faint)(`GPT — ${limits.gptHint}`)] : [fg(theme.faint)("…")]
+    return padBetween(left, right, width)
+  }
+
+  const pct = Math.round(gpt.sessionPct)
+  const barColor = pct >= 85 ? theme.red : pct >= 60 ? theme.yellow : theme.accent
+  const pctChunk = fg(pct >= 60 ? barColor : theme.text)(`${pct}%`)
+  const sep = fg(theme.faint)(" · ")
+  const bar = (cells: number): TextChunk[] => [fg(theme.dim)("GPT "), ...progressBar(pct / 100, cells, barColor), raw(" "), pctChunk]
+  const resets = gpt.sessionResetsAt === undefined ? [] : [sep, fg(theme.dim)(`resets ${fmtCountdown(gpt.sessionResetsAt, now)}`)]
+  const weekly =
+    gpt.weeklyPct === undefined
+      ? []
+      : (() => {
+          const wk = Math.round(gpt.weeklyPct)
+          return [sep, fg(wk >= 85 ? theme.red : wk >= 60 ? theme.yellow : theme.dim)(`wk ${wk}%`)]
+        })()
+
+  // Drop detail before precision when narrow: first the weekly text, then the
+  // reset countdown, then the bar shrinks and finally disappears.
+  const candidates: TextChunk[][] = [
+    [...bar(10), ...resets, ...weekly],
+    [...bar(10), ...resets],
+    bar(10),
+    bar(6),
+    [fg(theme.dim)("GPT "), pctChunk],
+  ]
+  const rightLen = plainLen(right)
+  const fits = (chunks: TextChunk[]) => plainLen(chunks) + (rightLen > 0 ? rightLen + 1 : 0) <= width
+  return padBetween(candidates.find(fits) ?? candidates[candidates.length - 1]!, right, width)
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { CliRenderer } from "@opentui/core"
-import { displayWidth, paletteForMode, paletteForTerminal, terminalBackgroundHex, truncate, wrapLines } from "../src/tui-theme"
+import { displayWidth, fmtCountdown, paletteForMode, paletteForTerminal, terminalBackgroundHex, truncate, wrapLines } from "../src/tui-theme"
 
 // terminalBackgroundHex reaches into opentui internals; the adapter must read a
 // real reply but degrade to undefined (→ static palettes) on any shape change.
@@ -64,6 +64,16 @@ describe("palette derivation from the terminal background", () => {
     expect(terminalBackgroundHex(fakeRenderer(undefined))).toBeUndefined()
     expect(terminalBackgroundHex(fakeRenderer({}))).toBeUndefined()
     expect(terminalBackgroundHex({} as unknown as CliRenderer)).toBeUndefined()
+  })
+
+  test("quota reset countdowns collapse to the two most significant units", () => {
+    const now = Date.now()
+    const minutes = (n: number) => now + n * 60_000
+    expect(fmtCountdown(minutes(2 * 1440 + 3 * 60 + 59), now)).toBe("2d 3h")
+    expect(fmtCountdown(minutes(2 * 60 + 10), now)).toBe("2h 10m")
+    expect(fmtCountdown(minutes(12), now)).toBe("12m")
+    expect(fmtCountdown(now + 30_000, now)).toBe("0m")
+    expect(fmtCountdown(now - 60_000, now)).toBe("0m")
   })
 
   test("no palette ever paints a panel background", () => {
