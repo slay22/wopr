@@ -4,11 +4,13 @@ import { BoxRenderable, StyledText, TextRenderable, bg, bold, createCliRenderer,
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig } from "./config"
 import { hooksForPipeline } from "./hooks"
+import { startLimitsPoller } from "./limits"
 import { builtInPipelines, defaultPipelineName, resolvePipeline } from "./pipeline"
-import { joinLines, padBetween, paletteForTerminal, plain, raw, setTheme, spinnerFrame, terminalBackgroundHex, theme, truncate } from "./tui-theme"
+import { joinLines, limitsRow, padBetween, paletteForTerminal, plain, raw, setTheme, spinnerFrame, terminalBackgroundHex, theme, truncate } from "./tui-theme"
 
 import type { ArcherConfig } from "./config"
 import type { BoxOptions, CliRenderer, KeyEvent, PasteEvent, TextChunk } from "@opentui/core"
+import type { LimitsSnapshot } from "./limits"
 import type { AgentSpec, HookSet, HookSpec, Step } from "./types"
 import type { PaletteColor } from "./tui-theme"
 
@@ -235,6 +237,8 @@ class LaunchPicker {
   }
 
   private readonly ticker: ReturnType<typeof setInterval>
+  private readonly stopLimits: () => void
+  private limits?: LimitsSnapshot
   private readonly headerText: TextRenderable
   private readonly pipelineText: TextRenderable
   private readonly pipelineBox: BoxRenderable
@@ -330,7 +334,7 @@ class LaunchPicker {
       paddingX: 1,
     })
 
-    const header = this.panel({ id: "archer-launch-header", height: 4, borderColor: theme.border, backgroundColor: theme.bg })
+    const header = this.panel({ id: "archer-launch-header", height: 5, borderColor: theme.border, backgroundColor: theme.bg })
     const body = new BoxRenderable(renderer, { id: "archer-launch-body", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1 })
 
     const selectFromList = (event: { y: number; preventDefault(): void; stopPropagation(): void }) => {
@@ -442,6 +446,9 @@ class LaunchPicker {
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
+    this.stopLimits = startLimitsPoller((snapshot) => {
+      this.limits = snapshot
+    })
     this.render()
   }
 
@@ -742,6 +749,7 @@ class LaunchPicker {
 
   private finish(selection: LaunchRunTuiResult) {
     clearInterval(this.ticker)
+    this.stopLimits()
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.keyInput.off("paste", this.handlePaste)
     this.renderer.off("theme_mode", this.handleThemeMode)
@@ -834,7 +842,7 @@ class LaunchPicker {
     const line1 = padBetween(title, stage, width)
     const project = basename(this.targetDir) || this.targetDir
     const line2 = new StyledText([fg(theme.faint)("target "), fg(theme.text)(truncate(project, Math.max(12, width - 8)))])
-    return joinLines([line1, line2])
+    return joinLines([line1, line2, limitsRow(this.limits, Date.now(), width)])
   }
 
   private pipelineContent(width: number) {
@@ -1052,8 +1060,8 @@ class LaunchPicker {
   }
 
   private listHeight() {
-    // header (4) + footer (3) + list panel borders (2).
-    return Math.max(3, this.renderer.height - 9)
+    // header (5) + footer (3) + list panel borders (2).
+    return Math.max(3, this.renderer.height - 10)
   }
 }
 

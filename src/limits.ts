@@ -283,6 +283,13 @@ async function fetchOpenRouter(): Promise<FetchResult<OpenRouterLimits>> {
 // ---------------------------------------------------------------------------
 // Poller.
 
+// Last snapshot fetched by any poller in this process: archer's TUIs open in
+// quick succession (launcher → run dashboard, runs browser → reopened run),
+// and each one starts its own poller — the cache gives the next header its
+// data instantly and skips re-hitting the endpoints seconds apart.
+let lastSnapshot: LimitsSnapshot | undefined
+const freshEnoughMs = 30_000
+
 /**
  * Background poll of both providers. `ok` replaces the segment, `auth` clears
  * it (surfacing a hint for GPT), `transient` keeps the last good data so a
@@ -291,7 +298,8 @@ async function fetchOpenRouter(): Promise<FetchResult<OpenRouterLimits>> {
  */
 export function startLimitsPoller(onUpdate: (snapshot: LimitsSnapshot) => void, intervalMs = limitsPollMs): () => void {
   let stopped = false
-  let last: LimitsSnapshot = { fetchedAt: 0 }
+  let last: LimitsSnapshot = lastSnapshot ?? { fetchedAt: 0 }
+  if (lastSnapshot) onUpdate(lastSnapshot)
 
   const tick = async () => {
     try {
@@ -303,13 +311,14 @@ export function startLimitsPoller(onUpdate: (snapshot: LimitsSnapshot) => void, 
         gptHint: gpt.ok ? undefined : gpt.kind === "auth" ? (gpt.hint ?? "codex login") : last.gptHint,
         openrouter: openrouter.ok ? openrouter.value : openrouter.kind === "transient" ? last.openrouter : undefined,
       }
+      lastSnapshot = last
       onUpdate(last)
     } catch (error) {
       log.warn(`limits poll failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
-  void tick()
+  if (Date.now() - last.fetchedAt >= freshEnoughMs) void tick()
   const timer = setInterval(() => void tick(), intervalMs)
   timer.unref?.()
   return () => {

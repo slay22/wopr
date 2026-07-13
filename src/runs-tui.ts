@@ -2,11 +2,13 @@ import { stdout } from "node:process"
 
 import { BoxRenderable, StyledText, TextRenderable, bold, createCliRenderer, fg, t } from "@opentui/core"
 
+import { startLimitsPoller } from "./limits"
 import { loadRunSummary } from "./runs"
 import {
   formatElapsed,
   formatMoney,
   joinLines,
+  limitsRow,
   padBetween,
   paletteForTerminal,
   plain,
@@ -22,6 +24,7 @@ import {
 import { runsRoot } from "./workspace"
 
 import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
+import type { LimitsSnapshot } from "./limits"
 import type { RunEntry, RunStatusKind, RunsResolution } from "./runs"
 import type { PaletteColor } from "./tui-theme"
 
@@ -60,6 +63,8 @@ class RunsBrowser {
   // A subshell owns the terminal while the renderer is suspended; ignore keys.
   private inSubshell = false
   private readonly ticker: ReturnType<typeof setInterval>
+  private readonly stopLimits: () => void
+  private limits?: LimitsSnapshot
   private readonly headerText: TextRenderable
   private readonly listText: TextRenderable
   private readonly detailsText: TextRenderable
@@ -114,7 +119,7 @@ class RunsBrowser {
 
     const header = this.panel({
       id: "archer-runs-header",
-      height: 4,
+      height: 5,
       borderColor: theme.border,
       backgroundColor: theme.bg,
     })
@@ -247,6 +252,9 @@ class RunsBrowser {
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
+    this.stopLimits = startLimitsPoller((snapshot) => {
+      this.limits = snapshot
+    })
     this.render()
   }
 
@@ -392,6 +400,7 @@ class RunsBrowser {
 
   private finish(resolution: RunsResolution) {
     clearInterval(this.ticker)
+    this.stopLimits()
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.off("theme_mode", this.handleThemeMode)
     if (!this.renderer.isDestroyed) this.renderer.destroy()
@@ -429,8 +438,8 @@ class RunsBrowser {
   }
 
   private listHeight() {
-    // header (4) + footer (3) + list panel borders (2).
-    return Math.max(3, this.renderer.height - 9)
+    // header (5) + footer (3) + list panel borders (2).
+    return Math.max(3, this.renderer.height - 10)
   }
 
   private summaryHeight() {
@@ -474,7 +483,7 @@ class RunsBrowser {
     ]
     const line1 = padBetween(title, totals, width)
     const line2 = t`${fg(theme.dim)(truncate(runsRoot(), width))}`
-    return joinLines([line1, line2])
+    return joinLines([line1, line2, limitsRow(this.limits, Date.now(), width)])
   }
 
   private listContent(width: number) {

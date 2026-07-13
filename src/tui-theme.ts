@@ -1,6 +1,7 @@
 import { StyledText, bold, fg, stringToStyledText, t } from "@opentui/core"
 
 import type { CliRenderer, TextChunk } from "@opentui/core"
+import type { LimitsSnapshot } from "./limits"
 
 // Backgrounds are never painted: the whole canvas is the terminal's own
 // background, and panels are delineated by borders alone. The single
@@ -261,6 +262,58 @@ export function fmtCountdown(resetsAt: number, now: number) {
 
 export function formatTime(time: number) {
   return new Date(time).toLocaleTimeString("en-GB", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+/**
+ * Header row shared by every archer TUI: the GPT subscription meter (5h
+ * session as a bar, weekly as text) on the left, the OpenRouter credit
+ * balance on the right. Account-level data, so it reads the same everywhere.
+ */
+export function limitsRow(limits: LimitsSnapshot | undefined, now: number, width: number): StyledText {
+  const right: TextChunk[] = []
+  const openrouter = limits?.openrouter
+  if (openrouter) {
+    right.push(
+      fg(theme.dim)("OR "),
+      fg(theme.text)(openrouter.kind === "remaining" ? `${formatMoney(openrouter.amount)} left` : `${formatMoney(openrouter.amount)}/mo`),
+    )
+  }
+
+  const gpt = limits?.gpt
+  if (!gpt) {
+    // Never an empty line: a placeholder keeps the row's cell real while the
+    // first poll is in flight (and an all-empty trailing line would let the
+    // text layout collapse to a single row).
+    const left: TextChunk[] = limits?.gptHint ? [fg(theme.faint)(`GPT — ${limits.gptHint}`)] : [fg(theme.faint)("…")]
+    return padBetween(left, right, width)
+  }
+
+  const pct = Math.round(gpt.sessionPct)
+  const barColor = pct >= 85 ? theme.red : pct >= 60 ? theme.yellow : theme.accent
+  const pctChunk = fg(pct >= 60 ? barColor : theme.text)(`${pct}%`)
+  const sep = fg(theme.faint)(" · ")
+  const bar = (cells: number): TextChunk[] => [fg(theme.dim)("GPT "), ...progressBar(pct / 100, cells, barColor), raw(" "), pctChunk]
+  const resets = gpt.sessionResetsAt === undefined ? [] : [sep, fg(theme.dim)(`resets ${fmtCountdown(gpt.sessionResetsAt, now)}`)]
+  const weekly =
+    gpt.weeklyPct === undefined
+      ? []
+      : (() => {
+          const wk = Math.round(gpt.weeklyPct)
+          return [sep, fg(wk >= 85 ? theme.red : wk >= 60 ? theme.yellow : theme.dim)(`wk ${wk}%`)]
+        })()
+
+  // Drop detail before precision when narrow: first the weekly text, then the
+  // reset countdown, then the bar shrinks and finally disappears.
+  const candidates: TextChunk[][] = [
+    [...bar(10), ...resets, ...weekly],
+    [...bar(10), ...resets],
+    bar(10),
+    bar(6),
+    [fg(theme.dim)("GPT "), pctChunk],
+  ]
+  const rightLen = chunksLength(right)
+  const fits = (chunks: TextChunk[]) => chunksLength(chunks) + (rightLen > 0 ? rightLen + 1 : 0) <= width
+  return padBetween(candidates.find(fits) ?? candidates[candidates.length - 1]!, right, width)
 }
 
 export function shortID(value: string) {

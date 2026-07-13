@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import { autoFollowGroup, comparisonColumnCount, initialContentTab, limitsRow, pipelineSelectionTargets } from "../src/tui"
+import { autoFollowGroup, comparisonColumnCount, initialContentTab, pipelineSelectionTargets } from "../src/tui"
+import { limitsRow } from "../src/tui-theme"
 
 import type { LimitsSnapshot } from "../src/limits"
 import type { ProgressPhase } from "../src/progress"
