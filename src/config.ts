@@ -163,7 +163,7 @@ export const defaultArcherConfig = `# Archer configuration.
 version: 1
 
 defaults:
-  # model: openai/gpt-5.5#xhigh # optional: uncomment to force every agent unless a step/agent overrides it
+  # model: openai/gpt-5.6-terra#xhigh # optional: uncomment to force every agent unless a step/agent overrides it
   # maxAttempts: 2
   # baseRef: main # optional: when unset, archer auto-detects (origin default branch, else main/master/develop/trunk, else current branch)
   # pipeline: implement
@@ -176,23 +176,23 @@ defaults:
 # agents:
 #   implementer:
 #     description: Implements the feature described in the PRD respecting repo patterns
-#     model: openai/gpt-5.5#xhigh
+#     model: openai/gpt-5.6-terra#xhigh
 #   design-polisher:
 #     description: Polishes new UI following the repo's design system, without redesigning
 #     model: anthropic/claude-opus-4-8
 #     temperature: 0.2
 #   api-reviewer:
 #     description: Reviews API consistency
-#     model: openai/gpt-5.5#xhigh
+#     model: openai/gpt-5.6-terra#xhigh
 
 # Archer ships these pipelines built in; pick one with -p/--pipeline without redeclaring it here:
 #   implement            the default: build the feature, then audit, polish, test, and adversarial review
-#   implement-lite       like implement, but swaps ChatGPT 5.5 xhigh phases for GLM 5.2
+#   implement-lite       like implement, but swaps GPT 5.6 Terra xhigh phases for GLM 5.2
 #   ultra-implement      like implement, with dual-model parallel audits and a final review/fix/validate stage
 #   refine               audit the current diff, then apply the triaged fixes (changes code)
 #   ultra-refine         like refine, with every audit fanned out across two models
 #   review               report-only: parallel audits across two models plus one prioritized report (no changes)
-#   review-lite          like review, but swaps ChatGPT 5.5 xhigh for GLM 5.2 (scope + audit fan-out); report stays on Opus
+#   review-lite          like review, but swaps GPT 5.6 Terra xhigh for GLM 5.2 (scope + audit fan-out); report stays on Opus
 # The default \`implement\` pipeline is inlined below as an editable starting point; redefining a name here overrides the built-in.
 pipelines:
   implement:

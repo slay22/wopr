@@ -21,11 +21,11 @@ PRD ──► implementer ──► patterns ──► security ──► design
 
 | Step | Agent | Model | What it does |
 |---|---|---|---|
-| `implementer` | `implementer` | `openai/gpt-5.5#xhigh` | Implements the feature respecting repo patterns |
-| `patterns` | `pattern-auditor` | `openai/gpt-5.5#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
-| `security` | `security-auditor` | `openai/gpt-5.5#xhigh` | Audits and fixes security issues |
+| `implementer` | `implementer` | `openai/gpt-5.6-terra#xhigh` | Implements the feature respecting repo patterns |
+| `patterns` | `pattern-auditor` | `openai/gpt-5.6-terra#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
+| `security` | `security-auditor` | `openai/gpt-5.6-terra#xhigh` | Audits and fixes security issues |
 | `design` | `design-polisher` | `openrouter/z-ai/glm-5.2` | Polishes UI following the repo's design system |
-| `tests` | `test-engineer` | `openai/gpt-5.5#xhigh` | Automated tests + relevant E2E/integration coverage |
+| `tests` | `test-engineer` | `openai/gpt-5.6-terra#xhigh` | Automated tests + relevant E2E/integration coverage |
 | `adversarial` | `adversarial-reviewer` | `openrouter/z-ai/glm-5.2` | Final adversarial review before PR creation |
 
 ## Built-in pipelines
@@ -35,12 +35,12 @@ Archer ships these pipelines; select one with `-p/--pipeline` (no config needed)
 | Pipeline | Changes code? | What it does |
 |---|---|---|
 | `implement` | yes | **The default** (runs with no `-p`). Implement a PRD, then audit, polish, test, and adversarial review (the table above). |
-| `implement-lite` | yes | Same workflow and agents as `implement`, but swaps the ChatGPT 5.5 xhigh phases (`implementer`, `patterns`, `security`, `tests`) to `openrouter/z-ai/glm-5.2` for a lower-cost implementation run. |
+| `implement-lite` | yes | Same workflow and agents as `implement`, but swaps the GPT 5.6 Terra xhigh phases (`implementer`, `patterns`, `security`, `tests`) to `openrouter/z-ai/glm-5.2` for a lower-cost implementation run. |
 | `ultra-implement` | yes | Like `implement`, but the pattern/security/adversarial reviews of the initial diff run in parallel across two models feeding a triage step, and the run ends with an audit-only final review, a fixer that applies only blocking findings, and a final validator. |
 | `refine` | yes | Audit the current diff (scope → bugs → clean-code → security), triage the findings adversarially, apply the accepted fixes, then validate them. |
 | `ultra-refine` | yes | Like `refine`, but every read-only audit is fanned out across two models before triage, fixes, and validation. |
 | `review` | **no — report only** | Scope the diff, run the bug / clean-code(+patterns) / security audits **in parallel across two models each**, then a single step synthesizes everything into one prioritized findings report. Makes no changes; the run's output is `reports/report.md`, which you read to decide whether to follow up with a `refine` run. |
-| `review-lite` | **no — report only** | Same as `review`, but scope and the first audit model swap from Opus / ChatGPT 5.5 xhigh to `openrouter/z-ai/glm-5.2`; the second parallel audit model and the final report stay on Opus 4.8. |
+| `review-lite` | **no — report only** | Same as `review`, but scope and the first audit model swap from Opus / GPT 5.6 Terra xhigh to `openrouter/z-ai/glm-5.2`; the second parallel audit model and the final report stay on Opus 4.8. |
 
 `refine`/`ultra-refine` are the change-applying counterparts of `review`: run `review` first to get a report, then `refine` if you want the fixes applied.
 
@@ -64,7 +64,7 @@ opencode models openai
 opencode models anthropic
 ```
 
-To use different providers, authenticate them in OpenCode and select models as `provider/model`. Archer's default `implement` pipeline uses `openai/gpt-5.5#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
+To use different providers, authenticate them in OpenCode and select models as `provider/model`. Archer's default `implement` pipeline uses `openai/gpt-5.6-terra#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
 
 ## Installation
 
@@ -215,7 +215,7 @@ A project can reshape archer entirely from one file. Everything is optional — 
 version: 1
 
 defaults:
-  model: openai/gpt-5.5#xhigh     # provider/model[#variant], used by steps with no model of their own
+  model: openai/gpt-5.6-terra#xhigh     # provider/model[#variant], used by steps with no model of their own
   maxAttempts: 2
   baseRef: main                    # optional; auto-detected when unset (origin default branch, else main/master/develop/trunk, else current branch)
   pipeline: quick                  # pipeline used when -p/--pipeline is not given
@@ -261,7 +261,7 @@ pipelines:
           - agent: clean-code
             models:                # fans this one step out across models, one read-only run per model
               - anthropic/claude-opus-4-8
-              - openai/gpt-5.5#xhigh
+              - openai/gpt-5.6-terra#xhigh
       - agent: adversarial
         name: triage
         reports: all               # every parallel/fan-out report from above, in one attachment set
@@ -293,7 +293,7 @@ attachments:                       # attached to every step, like repeatable --f
 
 The rules:
 
-- **Precedence**: CLI flag > project config > global config > built-in default. Within a config, for models specifically: step `model` > agent `model` > `defaults.model` > the agent's built-in preference (Opus for design/adversarial when the step doesn't set its own model) > `openai/gpt-5.5#xhigh`. `--model` overrides everything.
+- **Precedence**: CLI flag > project config > global config > built-in default. Within a config, for models specifically: step `model` > agent `model` > `defaults.model` > the agent's built-in preference (Opus for design/adversarial when the step doesn't set its own model) > `openai/gpt-5.6-terra#xhigh`. `--model` overrides everything.
 - **Conventions over wiring**: every agent step gets the PRD, the cumulative diff against the base branch (except the first step; opt out with `diff: false`), and the previous step's report (`reports: previous|all|none|[names]`). Its report lands at `reports/<step>.md` and its commit is `archer(<step>): …`.
 - **Aliases**: the built-in agents answer to their short names in steps — `patterns`, `security`, `design`, `tests`, `adversarial` — as well as their full names.
 - **Read-only agents**: set `agents.<name>.readOnly: true` to enforce audit-only behavior. Archer disables the agent's write/edit/bash tools, denies edit/bash/task permissions, and saves the phase report from the assistant response if the agent cannot write it directly.

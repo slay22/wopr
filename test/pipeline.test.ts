@@ -69,7 +69,7 @@ describe("default pipeline", () => {
         .map((step) => [step.name, step]),
     )
 
-    expect(byName.implementer).toMatchObject({ model: "openai/gpt-5.5", variant: "xhigh" })
+    expect(byName.implementer).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
     expect(byName.design).toMatchObject({ model: defaultImplementReviewModel })
     expect(byName.design?.variant).toBeUndefined()
     expect(byName.adversarial?.model).toBe(defaultImplementReviewModel)
@@ -134,12 +134,12 @@ describe("built-in implement-lite pipeline", () => {
     expect(byName.adversarial).toMatchObject({ model: "anthropic/claude-opus-4-8" })
   })
 
-  test("keeps GLM 5.2 scoped to the implementation and lite pipelines", () => {
+  test("keeps GLM 5.2 scoped to the implementation, lite, and refine pipelines", () => {
     const glmPipelines = Object.entries(builtInPipelines)
       .filter(([, spec]) => JSON.stringify(spec).includes("openrouter/z-ai/glm-5.2"))
       .map(([name]) => name)
 
-    expect(glmPipelines).toEqual(["implement", "implement-lite", "review-lite"])
+    expect(glmPipelines).toEqual(["implement", "implement-lite", "review-lite", "refine"])
   })
 })
 
@@ -154,15 +154,15 @@ describe("built-in review pipeline", () => {
     expect(pipeline.steps.some((step) => step.type === "human")).toBe(false)
   })
 
-  test("fans each audit across GPT 5.5 xhigh + opus and feeds a single report step with every audit", () => {
+  test("fans each audit across GPT 5.6 Terra xhigh + opus and feeds a single report step with every audit", () => {
     const pipeline = review()
     expect(stepNames(pipeline)).toEqual([
       "scope",
-      "clean-code__openai-gpt-5-5-xhigh",
+      "clean-code__openai-gpt-5-6-terra-xhigh",
       "clean-code__anthropic-claude-opus-4-8",
-      "security__openai-gpt-5-5-xhigh",
+      "security__openai-gpt-5-6-terra-xhigh",
       "security__anthropic-claude-opus-4-8",
-      "bugs__openai-gpt-5-5-xhigh",
+      "bugs__openai-gpt-5-6-terra-xhigh",
       "bugs__anthropic-claude-opus-4-8",
       "report",
     ])
@@ -171,11 +171,11 @@ describe("built-in review pipeline", () => {
     expect(report?.inputFiles).toEqual([
       "prd.md",
       "reports/scope.md",
-      "reports/clean-code__openai-gpt-5-5-xhigh.md",
+      "reports/clean-code__openai-gpt-5-6-terra-xhigh.md",
       "reports/clean-code__anthropic-claude-opus-4-8.md",
-      "reports/security__openai-gpt-5-5-xhigh.md",
+      "reports/security__openai-gpt-5-6-terra-xhigh.md",
       "reports/security__anthropic-claude-opus-4-8.md",
-      "reports/bugs__openai-gpt-5-5-xhigh.md",
+      "reports/bugs__openai-gpt-5-6-terra-xhigh.md",
       "reports/bugs__anthropic-claude-opus-4-8.md",
     ])
   })
@@ -220,6 +220,24 @@ describe("built-in review-lite pipeline", () => {
       "reports/bugs__openrouter-z-ai-glm-5-2.md",
       "reports/bugs__anthropic-claude-opus-4-8.md",
     ])
+  })
+})
+
+describe("built-in refine pipeline", () => {
+  test("scopes with GLM 5.2, audits/fixes/validates with GPT 5.6 Terra xhigh, and triages with opus", () => {
+    const byName = Object.fromEntries(
+      resolvePipeline({ name: "refine", spec: builtInPipelines.refine!, agents: builtInAgents })
+        .steps.filter((step): step is AgentStep => step.type === "agent")
+        .map((step) => [step.name, step]),
+    )
+
+    expect(byName.scope).toMatchObject({ model: "openrouter/z-ai/glm-5.2" })
+    expect(byName.bugs).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
+    expect(byName["clean-code"]).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
+    expect(byName.security).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
+    expect(byName.triage).toMatchObject({ model: "anthropic/claude-opus-4-8" })
+    expect(byName.fixes).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
+    expect(byName.validator).toMatchObject({ model: "openai/gpt-5.6-terra", variant: "xhigh" })
   })
 })
 

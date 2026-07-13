@@ -1,13 +1,13 @@
 import type { AgentSpec, AgentStep, HumanStep, Pipeline, Step } from "./types"
 
-export const defaultGptModel = "openai/gpt-5.5"
+export const defaultGptModel = "openai/gpt-5.6-terra"
 export const defaultGptVariant = "xhigh"
 export const defaultOpusModel = "anthropic/claude-opus-4-8"
 export const defaultImplementReviewModel = "openrouter/z-ai/glm-5.2"
 
 const fallbackModel = `${defaultGptModel}#${defaultGptVariant}`
 
-/** Models the built-in review/refine pipelines fan their audits across; a project can override per step. */
+/** Second model the built-in ultra pipelines fan their audits across; a project can override per step. */
 const sonnetModel = "openrouter/anthropic/claude-sonnet-5"
 /** Lower-cost replacement for the GPT xhigh phases in the lightweight pipelines. */
 const glmModel = "openrouter/z-ai/glm-5.2"
@@ -222,7 +222,7 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
     ],
   },
   "implement-lite": {
-    description: "Like implement, but swaps ChatGPT 5.5 xhigh phases for GLM 5.2 to reduce cost",
+    description: "Like implement, but swaps GPT 5.6 Terra xhigh phases for GLM 5.2 to reduce cost",
     steps: [
       { agent: "implementer", model: glmModel, reports: "none" },
       { agent: "patterns", model: glmModel },
@@ -249,7 +249,7 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
   },
   "review-lite": {
     description:
-      "Like review, but swaps ChatGPT 5.5 xhigh for GLM 5.2 in scope and the audit fan-out; the report and the parallel audit slot keep Opus.",
+      "Like review, but swaps GPT 5.6 Terra xhigh for GLM 5.2 in scope and the audit fan-out; the report and the parallel audit slot keep Opus.",
     steps: [
       { agent: "review-scope", name: "scope", model: glmModel, reports: "none", diff: true },
       {
@@ -265,12 +265,12 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
   refine: {
     description: "Audit-only PR review, adversarial finding triage, targeted fixes, and final validation — applies changes.",
     steps: [
-      { agent: "review-scope", name: "scope", model: sonnetModel, reports: "none", diff: true },
-      { agent: "bug-auditor", name: "bugs", model: sonnetModel, reports: ["scope"] },
-      { agent: "clean-code-auditor", name: "clean-code", model: sonnetModel, reports: ["scope"] },
-      { agent: "security-reviewer", name: "security", model: sonnetModel, reports: ["scope"] },
+      { agent: "review-scope", name: "scope", model: glmModel, reports: "none", diff: true },
+      { agent: "bug-auditor", name: "bugs", model: fallbackModel, reports: ["scope"] },
+      { agent: "clean-code-auditor", name: "clean-code", model: fallbackModel, reports: ["scope"] },
+      { agent: "security-reviewer", name: "security", model: fallbackModel, reports: ["scope"] },
       { agent: "review-adversary", name: "triage", model: defaultOpusModel, reports: ["scope", "bugs", "clean-code", "security"] },
-      { agent: "review-fixer", name: "fixes", model: sonnetModel, reports: ["triage"] },
+      { agent: "review-fixer", name: "fixes", model: fallbackModel, reports: ["triage"] },
       { agent: "review-validator", name: "validator", model: fallbackModel, reports: "all" },
     ],
   },
