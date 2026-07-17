@@ -127,6 +127,15 @@ export type RunOutcome = {
   runDir: string
 }
 
+/** Live state of a converge-loop group, surfaced so the dashboard can show iteration + verdict. */
+export type LoopProgress = {
+  loopId: string
+  iteration: number
+  maxIterations: number
+  verdict?: "PASS" | "PARTIAL" | "REJECT"
+  status: "running" | "replanning" | "converged" | "stalled" | "exhausted"
+}
+
 export type ProgressUI = {
   /** `runDir` is the run workspace (where phase reports land); passed early so the reports tab works during a live run, not just on the finish screen. */
   start(runID: string, targetDir: string, runDir?: string): void
@@ -159,6 +168,8 @@ export type ProgressUI = {
   runFinished?(outcome: RunOutcome): Promise<void>
   /** True when the finish screen handed the run dir to an iterate session ([i]), so cleanup must skip it. */
   keepRunDirRequested?(): boolean
+  /** Reports the current converge-loop iteration/verdict; the dashboard renders it in the header. */
+  loopState?(info: LoopProgress): void
   message(message: string): void
   suspend(): void
   resume(): void

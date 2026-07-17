@@ -655,6 +655,7 @@ async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: Loop
 
   for (let iteration = 1; iteration <= loop.maxIterations; iteration++) {
     shutdown.throwIfRequested()
+    progress.loopState?.({ loopId: loop.loopId, iteration, maxIterations: loop.maxIterations, status: "running" })
     if (iteration > 1) {
       progress.message(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
       log.info(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
@@ -686,17 +687,24 @@ async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: Loop
     const currVerdict: Verdict = evalResult?.ran && !evalResult.passed ? "REJECT" : (report?.verdict ?? "REJECT")
     const currPlanSig = plan ? planSignature(plan) : ""
 
+    const loopBase = { loopId: loop.loopId, iteration, maxIterations: loop.maxIterations, verdict: currVerdict }
     if (currVerdict === "PASS") {
       converged = true
+      progress.loopState?.({ ...loopBase, status: "converged" })
       progress.message(`[${loop.loopId}] converged (PASS) after ${iteration} iteration${iteration === 1 ? "" : "s"}`)
       break
     }
-    if (iteration >= loop.maxIterations) break
+    if (iteration >= loop.maxIterations) {
+      progress.loopState?.({ ...loopBase, status: "exhausted" })
+      break
+    }
     if (isStalled({ prevPlanSig, currPlanSig, prevVerdict, currVerdict })) {
+      progress.loopState?.({ ...loopBase, status: "stalled" })
       progress.message(`[${loop.loopId}] no progress (same plan, verdict ${currVerdict}); stopping after ${iteration} iterations`)
       log.warn(`[${loop.loopId}] stalled after ${iteration} iterations`)
       break
     }
+    progress.loopState?.({ ...loopBase, status: "replanning" })
 
     const feedback = [report ? formatValidatorFeedback(report) : `Verdict: ${currVerdict} (validator report unavailable)`, evalResult ? formatEvalForValidator(evalResult) : ""]
       .filter(Boolean)

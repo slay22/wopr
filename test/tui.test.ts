@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 
-import { autoFollowGroup, comparisonColumnCount, initialContentTab, iteratePrompt, pipelineSelectionTargets } from "../src/tui"
+import { autoFollowGroup, comparisonColumnCount, computeDefcon, initialContentTab, iteratePrompt, pipelineSelectionTargets } from "../src/tui"
 
-import type { ProgressPhase } from "../src/progress"
+import type { LoopProgress, ProgressPhase } from "../src/progress"
 
 describe("run dashboard defaults", () => {
   test("starts live runs on session and historical runs on reports, never logs", () => {
@@ -26,6 +26,30 @@ describe("iterate prompt", () => {
     expect(prompt).not.toContain("\n")
     // The agent must know to wait instead of acting on the reports alone.
     expect(prompt.toLowerCase()).toContain("wait")
+  })
+})
+
+describe("computeDefcon", () => {
+  const phase = (status: string, attempt = 0) => ({ status: status as never, attempt })
+  const loop = (over: Partial<LoopProgress>): LoopProgress => ({ loopId: "loop1", iteration: 1, maxIterations: 3, status: "running", ...over })
+
+  test("calm run is DEFCON 5, a failed run is DEFCON 1", () => {
+    expect(computeDefcon([phase("running", 1), phase("completed", 1)], undefined, false)).toBe(5)
+    expect(computeDefcon([phase("completed")], undefined, true)).toBe(1)
+  })
+
+  test("retries and a failed-but-not-final phase escalate", () => {
+    expect(computeDefcon([phase("running", 2)], undefined, false)).toBe(3)
+    expect(computeDefcon([phase("running", 3)], undefined, false)).toBe(2)
+    expect(computeDefcon([phase("failed", 1)], undefined, false)).toBe(2)
+  })
+
+  test("loop verdict/status raise the alert", () => {
+    expect(computeDefcon([], loop({ verdict: "PARTIAL" }), false)).toBe(4)
+    expect(computeDefcon([], loop({ status: "replanning", verdict: "REJECT" }), false)).toBe(3)
+    expect(computeDefcon([], loop({ status: "stalled" }), false)).toBe(2)
+    // run-failed still trumps everything.
+    expect(computeDefcon([], loop({ status: "converged", verdict: "PASS" }), true)).toBe(1)
   })
 })
 

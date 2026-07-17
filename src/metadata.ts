@@ -214,6 +214,7 @@ export function recordProgress(progress: ProgressUI, store: RunMetadataStore): P
       progress.phaseFailed(name, detail)
     },
     phaseRestored: (name, snapshot) => progress.phaseRestored(name, snapshot),
+    loopState: (info) => progress.loopState?.(info),
     message: (message) => progress.message(message),
     suspend: () => progress.suspend(),
     resume: () => progress.resume(),

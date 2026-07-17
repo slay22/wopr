@@ -53,6 +53,7 @@ import type {
   ProgressDiffSummary,
   HumanReviewAction,
   HumanReviewPromptInfo,
+  LoopProgress,
   ProgressMessage,
   ProgressMessageChannel,
   ProgressPhase,
@@ -250,6 +251,8 @@ export class TuiProgress implements ProgressUI {
   private lastActivityAt = Date.now()
   private readonly startedAt = Date.now()
   private readonly phases: PhaseState[]
+  /** Latest converge-loop state, rendered in the header while a loop group runs. */
+  private loop?: LoopProgress
   private readonly feed: FeedEntry[] = []
   // The live model transcript per phase (the session tab): verbatim reasoning
   // and response text, interleaved with tool/bash action markers. Streamed in
@@ -1172,6 +1175,11 @@ export class TuiProgress implements ProgressUI {
     this.reports.delete(name)
   }
 
+  loopState(info: LoopProgress) {
+    this.loop = info
+    this.render()
+  }
+
   message(message: string) {
     this.addEvent("wopr", "system", message)
     this.render()
@@ -1577,14 +1585,42 @@ export class TuiProgress implements ProgressUI {
       fg(theme.faint)("  ·  "),
       fg(theme.dim)(`↑${formatCount(usage.tokens.input)} ↓${formatCount(usage.tokens.output)} tokens`),
     ]
-    const title: TextChunk[] = [bold(fg(theme.accent)("◆ wopr"))]
+    const defcon = this.defconLevel()
+    const title: TextChunk[] = [bold(fg(theme.accent)("◆ wopr")), fg(theme.faint)("  ·  "), bold(fg(defconColor(defcon))(`DEFCON ${defcon}`))]
     if (this.finished) {
       title.push(
         fg(theme.faint)("  ·  "),
         this.finished.status === "completed" ? bold(fg(theme.green)("✓ run completed")) : bold(fg(theme.red)("✗ run failed")),
       )
     }
-    return padBetween(title, totals, width)
+    const line1 = padBetween(title, totals, width)
+    return this.loop ? joinLines([line1, this.convergeLine()]) : line1
+  }
+
+  private defconLevel(): number {
+    return computeDefcon(this.phases, this.loop, this.finished?.status === "failed")
+  }
+
+  private convergeLine(): StyledText {
+    const loop = this.loop!
+    const sep = fg(theme.faint)("  ·  ")
+    const statusText: Record<LoopProgress["status"], string> = {
+      running: "converging",
+      replanning: "re-planning from feedback",
+      converged: "converged",
+      stalled: "no progress — stopped",
+      exhausted: "max iterations reached",
+    }
+    const chunks: TextChunk[] = [
+      fg(theme.dim)("CONVERGE "),
+      fg(theme.text)(`${loop.iteration}/${loop.maxIterations}`),
+      sep,
+      fg(theme.dim)("verdict "),
+      loop.verdict ? verdictChunk(loop.verdict) : fg(theme.faint)("—"),
+      sep,
+      fg(loop.status === "converged" ? theme.green : loop.status === "stalled" || loop.status === "exhausted" ? theme.red : theme.dim)(statusText[loop.status]),
+    ]
+    return new StyledText(chunks)
   }
 
   // The working directory renders above the header box, outside its border.
@@ -2630,6 +2666,36 @@ function groupStatus(members: readonly PhaseState[]): PhaseStatus {
   if (members.some((m) => m.status === "failed")) return "failed"
   if (members.every((m) => m.status === "skipped")) return "skipped"
   return "completed"
+}
+
+/**
+ * NORAD readiness from run health: DEFCON 5 (calm) escalating to 1 (run failed).
+ * Retries and REJECT/stall verdicts raise the alert level.
+ */
+export function computeDefcon(phases: readonly { status: PhaseStatus; attempt: number }[], loop: LoopProgress | undefined, runFailed: boolean): number {
+  if (runFailed) return 1
+  let level = 5
+  for (const phase of phases) {
+    if (phase.status === "failed" || phase.attempt >= 3) level = Math.min(level, 2)
+    else if (phase.attempt === 2) level = Math.min(level, 3)
+  }
+  if (loop) {
+    if (loop.status === "stalled" || loop.status === "exhausted") level = Math.min(level, 2)
+    else if (loop.status === "replanning" || loop.verdict === "REJECT") level = Math.min(level, 3)
+    else if (loop.verdict === "PARTIAL") level = Math.min(level, 4)
+  }
+  return level
+}
+
+/** DEFCON 5 (calm) → 1 (run failed): green, teal, yellow, orange, red. */
+function defconColor(level: number): string {
+  return level >= 5 ? theme.green : level === 4 ? theme.teal : level === 3 ? theme.yellow : level === 2 ? theme.orange : theme.red
+}
+
+function verdictChunk(verdict: "PASS" | "PARTIAL" | "REJECT"): TextChunk {
+  if (verdict === "PASS") return fg(theme.green)("✓ PASS")
+  if (verdict === "PARTIAL") return fg(theme.yellow)("◐ PARTIAL")
+  return fg(theme.red)("✗ REJECT")
 }
 
 function groupStatusLabel(status: PhaseStatus): string {
