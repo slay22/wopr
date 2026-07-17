@@ -5,10 +5,8 @@
 <p align="center"><em>A self-correcting orchestration harness for multi-model agent pipelines.</em></p>
 
 <p align="center">
-  <img src="assets/screenshot.svg" alt="the WOPR dashboard mid converge-loop: a NORAD phosphor big board showing the DEFCON meter and the plan/implement/validate iteration" width="960">
+  <img src="assets/screenshot.png" alt="the WOPR TUI mid-run: a NORAD phosphor big board showing a parallel review group (patterns, security, design) running concurrently, with the pipeline panel, DEFCON meter, and per-agent session feeds" width="960">
 </p>
-
-> The screenshot above is a rendered mockup of the live TUI. To capture a real one, run a pipeline in your terminal and grab the phosphor dashboard.
 
 WOPR takes a PRD and turns it into a structured, reviewable implementation: a **pipeline** of specialized agents — implementer, pattern auditor, security auditor, design polisher, test engineer, adversarial reviewer — each step a fresh agent on the model best suited to its job, leaving one commit per phase. Its headline mode is the **converge loop**: a plan→implement→validate cycle that re-plans on the validator's own findings and keeps going until the work passes, stalls, or hits its iteration cap. Every step runs on any model from any provider you're authenticated with in [pi](https://github.com/earendil-works/pi), within the same run.
 
