@@ -7,7 +7,7 @@ import { SessionManager, type AgentSession, type AgentSessionEvent } from "@eare
 
 import { agentToolNames, basePromptName, loadAgentPrompt } from "./agents"
 import { type Attachment, fileParts, renderAttachments } from "./attachments"
-import { addAllAndCommit, createCleanRepoSnapshot, dirtyFilesPreview, dirtyTreeError, ensureRepoReady, restoreRepoSnapshot, type RepoSnapshot, statusPorcelain, writeDiff } from "./git"
+import { addAllAndCommit, createCleanRepoSnapshot, dirtyFilesPreview, dirtyTreeError, ensureRepoReady, initializeRepoWithInitialCommit, restoreRepoSnapshot, type RepoSnapshot, statusPorcelain, writeDiff } from "./git"
 import { formatEvalForValidator, runEvaluation } from "./evaluate"
 import { hookPhaseNames, hooksForPipeline, runHooks, type HookStage } from "./hooks"
 import { runHumanReviewGate } from "./human"
@@ -221,6 +221,15 @@ function installShutdownSignals(shutdown: RunShutdown) {
 }
 
 export async function run(options: RunOptions) {
+  if (options.initRepo) {
+    // Greenfield: create the repo/initial commit, then pin the diff base to that
+    // root commit. wopr commits each phase onto the current branch, so leaving the
+    // base as a moving ref (the "HEAD" a fresh repo resolves to) would make every
+    // phase after the first diff against its own last commit — i.e. empty.
+    const initialSha = await initializeRepoWithInitialCommit(options.targetDir, { baseRef: options.baseRef })
+    if (initialSha) options.baseRef = initialSha
+  }
+
   await ensureRepoReady(options.targetDir, {
     includeDirty: options.includeDirty,
     maxAttempts: options.maxAttempts,

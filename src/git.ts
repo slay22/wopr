@@ -124,18 +124,26 @@ export async function repoBootstrapStatus(cwd: string): Promise<RepoBootstrapSta
   return head.exitCode === 0 ? "ready" : "no-commits"
 }
 
-export async function initializeRepoWithInitialCommit(cwd: string, options: { baseRef?: string } = {}) {
+/**
+ * Ensures `cwd` is a git repo with at least one commit, creating the repo
+ * and/or an (empty) initial commit as needed. Returns the SHA of the initial
+ * commit it created, or undefined if the repo was already ready (no-op). The
+ * SHA lets callers freeze a diff base to the root commit — necessary because
+ * wopr commits each phase onto the current branch, so a moving ref would make
+ * later phase diffs empty.
+ */
+export async function initializeRepoWithInitialCommit(cwd: string, options: { baseRef?: string } = {}): Promise<string | undefined> {
   const status = await repoBootstrapStatus(cwd)
   if (status === "no-repo") {
     const args = ["init", "-q"]
     if (options.baseRef && isSafeInitialBranch(options.baseRef)) args.push("-b", options.baseRef)
     await execFile("git", args, { cwd })
   } else if (status === "ready") {
-    return
+    return undefined
   }
 
   const currentStatus = await repoBootstrapStatus(cwd)
-  if (currentStatus === "ready") return
+  if (currentStatus === "ready") return undefined
   if (currentStatus === "no-repo") throw new Error("couldn't initialize git repository")
 
   if (options.baseRef && isSafeInitialBranch(options.baseRef)) {
@@ -155,6 +163,9 @@ export async function initializeRepoWithInitialCommit(cwd: string, options: { ba
 
   const commitArgs = porcelain.stdout.trim() === "" ? ["commit", "--allow-empty", "-m", "wopr: initial commit"] : ["commit", "-m", "wopr: initial commit"]
   await execFile("git", commitArgs, { cwd, env: woprGitEnv })
+
+  const sha = await execFile("git", ["rev-parse", "HEAD"], { cwd })
+  return sha.stdout.trim()
 }
 
 export async function statusPorcelain(cwd: string): Promise<string> {

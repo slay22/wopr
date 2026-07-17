@@ -283,6 +283,27 @@ describe("initializeRepoWithInitialCommit", () => {
     await expect(ensureRepoReady(dir, { baseRef: "main" })).resolves.toBeUndefined()
   })
 
+  test("returns the root SHA that stays a non-empty diff base after later commits", async () => {
+    const dir = await tmpRepoDir()
+
+    const sha = await initializeRepoWithInitialCommit(dir, { baseRef: "main" })
+    expect(sha).toBe(await gitOutput(["rev-parse", "HEAD"], dir))
+
+    // A later phase commit (what wopr makes per step) must still show up when
+    // diffing against the frozen root SHA; a moving ref like HEAD would be empty.
+    await gitOutput(["config", "user.email", "t@t"], dir)
+    await gitOutput(["config", "user.name", "t"], dir)
+    await writeFile(join(dir, "app.ts"), "export const x = 1\n")
+    await gitOutput(["add", "-A"], dir)
+    await gitOutput(["commit", "-m", "wopr(implementer): x"], dir)
+
+    expect(await gitOutput(["diff", "--name-only", sha!], dir)).toBe("app.ts")
+    expect(await gitOutput(["diff", "--name-only", "HEAD"], dir)).toBe("")
+
+    // No-op on an already-ready repo returns undefined.
+    expect(await initializeRepoWithInitialCommit(dir, { baseRef: "main" })).toBeUndefined()
+  })
+
   test("refuses to create an initial commit with likely secrets", async () => {
     const dir = await tmpRepoDir()
     await writeFile(join(dir, ".env"), "TOKEN=secret\n")

@@ -134,6 +134,13 @@ wopr "Add onboarding screen with 3 steps and local persistence of progress"
 # prompt from file
 wopr --prompt-file prd.md
 
+# greenfield: build a brand-new project from a PRD in an empty directory.
+# --init-repo creates the git repo and the initial commit for you (no manual
+# `git init` needed), then every phase commits on top; phase diffs are measured
+# from that root commit. Without --init-repo the CLI expects an existing repo.
+mkdir my-app && cd my-app
+wopr --prompt-file prd.md --init-repo
+
 # attach files or directories to all phases
 wopr --prompt-file prd.md --file src/features/onboarding --file tests/onboarding.test.ts
 

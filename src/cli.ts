@@ -38,6 +38,7 @@ export type ParsedArgs = {
    */
   baseDetectionDir?: string
   targetDir: string
+  initRepo?: boolean
   includeDirty?: boolean
   yolo?: boolean
   smart?: boolean
@@ -308,6 +309,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     maxAttempts: parsed.maxAttempts ?? defaults.maxAttempts ?? 2,
     baseRef: await resolveBaseRef(parsed, defaults),
     targetDir: parsed.targetDir,
+    initRepo: parsed.initRepo ?? false,
     includeDirty: parsed.includeDirty ?? false,
     yolo: parsed.yolo ?? false,
     smart: parsed.smart ?? false,
@@ -397,6 +399,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break
       case "--no-keep-run-dir":
         parsed.keepRunDir = false
+        break
+      case "--init-repo":
+        parsed.initRepo = true
         break
       case "--include-dirty":
         parsed.includeDirty = true
@@ -498,6 +503,7 @@ Flags:
   --yolo                   Auto-allow ask-level permissions (hard denylist still applies; shift+tab cycles it live in the TUI)
   --smart                  Smart auto-accept: an AI judge auto-allows safe ask-level requests and escalates risky ones (shift+tab cycles)
   --smart-model <provider/model[#variant]> Model for the smart auto-accept judge (default: defaults.autoAcceptJudgeModel, else the run's model)
+  --init-repo              Start from scratch: create the git repo and/or an initial commit first, so wopr can run in an empty/uninitialized directory
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
   --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)

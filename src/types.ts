@@ -13,6 +13,8 @@ export type RunOptions = {
   maxAttempts: number
   baseRef: string
   targetDir: string
+  /** Create the git repo and/or an initial commit before running, so wopr can start in an empty/uninitialized directory (greenfield). */
+  initRepo: boolean
   includeDirty: boolean
   /** Start with auto-accept enabled: ask-level permissions are allowed without prompting (denylist still applies). */
   yolo: boolean
