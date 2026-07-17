@@ -8,9 +8,12 @@ import { SessionManager, type AgentSession, type AgentSessionEvent } from "@eare
 import { agentToolNames, basePromptName, loadAgentPrompt } from "./agents"
 import { type Attachment, fileParts, renderAttachments } from "./attachments"
 import { addAllAndCommit, createCleanRepoSnapshot, dirtyFilesPreview, dirtyTreeError, ensureRepoReady, restoreRepoSnapshot, type RepoSnapshot, statusPorcelain, writeDiff } from "./git"
+import { formatEvalForValidator, runEvaluation } from "./evaluate"
 import { hookPhaseNames, hooksForPipeline, runHooks, type HookStage } from "./hooks"
 import { runHumanReviewGate } from "./human"
 import { log } from "./log"
+import { formatValidatorFeedback, isStalled, planSignature } from "./loop"
+import { parsePlan, parseValidatorReport, type Verdict } from "./plan-schema"
 import { openRunMetadata, recordProgress, type RunMetadataStore } from "./metadata"
 import { openOpencodeSessionWindow } from "./opencode"
 import { createPhaseSession, lastAssistantText, type ModelSelection } from "./pi"
@@ -32,7 +35,7 @@ import {
   type RunOutcome,
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
-import type { AgentSpec, AgentStep, HookSet, HookSpec, Pipeline, RunOptions, Step } from "./types"
+import type { AgentSpec, AgentStep, HookSet, HookSpec, LoopMeta, Pipeline, RunOptions, Step } from "./types"
 import { addTokens, emptyTokens, tokensFromValue } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 
@@ -315,18 +318,17 @@ export async function run(options: RunOptions) {
     const runMetadata = metadata
     const permissionGate = permissions
 
-    for (const batch of planBatches(pipeline.steps)) {
-      shutdown.throwIfRequested()
+    // One non-loop batch: a human gate, or a group of agent steps run concurrently.
+    const runStandardBatch = async (batch: Step[]) => {
       const [first] = batch
-
       if (batch.length === 1 && first?.type === "human") {
         if (shouldSkip(first, options)) {
           progress.phaseSkipped(first.name)
           log.warn(`[${first.name}] skipped by flag`)
-          continue
+          return
         }
         await runHumanReviewGate(workspace, options, serverUrl, progress, permissionGate, first.name)
-        continue
+        return
       }
 
       const agentBatch = batch as AgentStep[]
@@ -352,6 +354,45 @@ export async function run(options: RunOptions) {
       if (userAbort) throw userAbort.reason
       const failures = results.flatMap((result, index) => (result.status === "rejected" ? [{ name: agentBatch[index]!.name, error: result.reason }] : []))
       if (failures.length > 0) throw new PhaseGroupError(failures)
+    }
+
+    const batches = planBatches(pipeline.steps)
+    for (let index = 0; index < batches.length; index++) {
+      shutdown.throwIfRequested()
+      const batch = batches[index]!
+      const first = batch[0]
+      const loopId = first?.type === "agent" ? first.loopId : undefined
+
+      if (loopId) {
+        // A loop group is a contiguous run of batches sharing one loopId; collect them,
+        // then hand the whole span to the converge driver.
+        const loopBatches: Step[][] = []
+        while (index < batches.length) {
+          const next = batches[index]![0]
+          if (next?.type === "agent" && next.loopId === loopId) loopBatches.push(batches[index++]!)
+          else break
+        }
+        index-- // the for-loop's ++ resumes at the first batch after the loop span
+        const meta = (pipeline.loops ?? []).find((loop) => loop.loopId === loopId)
+        if (meta) {
+          await runConvergeLoop(meta, loopBatches, {
+            workspace,
+            options,
+            extraFiles,
+            projectContextFiles,
+            progress,
+            shutdown,
+            gitLock,
+            permissions: permissionGate,
+            serverUrl,
+          })
+        } else {
+          for (const loopBatch of loopBatches) await runStandardBatch(loopBatch)
+        }
+        continue
+      }
+
+      await runStandardBatch(batch)
     }
 
     progress.message("writing run summary")
@@ -565,6 +606,8 @@ async function runPhase(
   gitLock: GitLock,
   permissions: PermissionGate,
   takeover?: TakeoverContext,
+  /** Throws on an unusable final report (e.g. malformed loop JSON), which makes the phase retry. */
+  validateOutput?: (text: string) => void,
 ) {
   progress.phaseStarted(phase.name, phase.description)
   log.section(`${phase.name} - ${phase.description}`)
@@ -572,7 +615,7 @@ async function runPhase(
   try {
     const prepared = await preparePhaseRun(workspace, phase, options, extraFiles, projectContextFiles)
     const baseline = await gitLock(() => createCleanRepoSnapshot(options.targetDir))
-    const assistantText = await runPhaseWithRetries(workspace, phase, options.targetDir, prepared, baseline, progress, shutdown, gitLock, permissions, takeover)
+    const assistantText = await runPhaseWithRetries(workspace, phase, options.targetDir, prepared, baseline, progress, shutdown, gitLock, permissions, takeover, validateOutput)
 
     const reportAbs = await persistPhaseReport(workspace, phase, assistantText)
     await gitLock(() => commitPhase(phase, reportAbs, options.targetDir))
@@ -581,6 +624,107 @@ async function runPhase(
     progress.phaseFailed(phase.name, formatSdkError(error))
     throw error
   }
+}
+
+type LoopDeps = {
+  workspace: Workspace
+  options: RunOptions
+  extraFiles: Attachment[]
+  projectContextFiles: string[]
+  progress: ProgressUI
+  shutdown: RunShutdown
+  gitLock: GitLock
+  permissions: PermissionGate
+  serverUrl: string
+}
+
+/**
+ * Drives a converge-loop group: run plan → implement → validate, gate on the validator's
+ * verdict (and the optional build/test evaluation), and re-run — feeding the findings back to
+ * the planner — until it PASSes, `maxIterations` is hit, or the plan stalls (same plan + no
+ * verdict improvement). Each iteration's phases commit as usual, so iterations accumulate.
+ *
+ * ponytail: loops re-run their phases in place (the TUI rows just update); resuming mid-loop
+ * re-runs the whole loop rather than restoring per-iteration reports. Fine for the MVP.
+ */
+async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: LoopDeps) {
+  const { workspace, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, serverUrl } = deps
+  let prevPlanSig: string | undefined
+  let prevVerdict: Verdict | undefined
+  let converged = false
+
+  for (let iteration = 1; iteration <= loop.maxIterations; iteration++) {
+    shutdown.throwIfRequested()
+    if (iteration > 1) {
+      progress.message(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
+      log.info(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
+    }
+
+    for (const batch of loopBatches) {
+      for (const step of batch as AgentStep[]) {
+        if (shouldSkip(step, options)) {
+          progress.phaseSkipped(step.name)
+          continue
+        }
+        // Validate the structured output inline so malformed JSON retries within the phase.
+        const validateOutput =
+          step.loopRole === "plan"
+            ? (text: string) => void parsePlan(text)
+            : step.loopRole === "validate"
+              ? (text: string) => void parseValidatorReport(text)
+              : undefined
+        await runPhase(workspace, step, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, { serverUrl, permissions }, validateOutput)
+      }
+    }
+
+    // Optional build/test gate; a failure blocks PASS and is fed back to the planner.
+    const evalResult = loop.evaluation ? await runEvaluation(options.targetDir, loop.evaluation, shutdown.signal) : undefined
+    if (evalResult?.ran) log.info(`[${loop.loopId}] evaluation ${evalResult.passed ? "passed" : "FAILED"}`)
+
+    const report = await readLoopReport(workspace, loop.validateName, parseValidatorReport)
+    const plan = await readLoopReport(workspace, loop.planName, parsePlan)
+    const currVerdict: Verdict = evalResult?.ran && !evalResult.passed ? "REJECT" : (report?.verdict ?? "REJECT")
+    const currPlanSig = plan ? planSignature(plan) : ""
+
+    if (currVerdict === "PASS") {
+      converged = true
+      progress.message(`[${loop.loopId}] converged (PASS) after ${iteration} iteration${iteration === 1 ? "" : "s"}`)
+      break
+    }
+    if (iteration >= loop.maxIterations) break
+    if (isStalled({ prevPlanSig, currPlanSig, prevVerdict, currVerdict })) {
+      progress.message(`[${loop.loopId}] no progress (same plan, verdict ${currVerdict}); stopping after ${iteration} iterations`)
+      log.warn(`[${loop.loopId}] stalled after ${iteration} iterations`)
+      break
+    }
+
+    const feedback = [report ? formatValidatorFeedback(report) : `Verdict: ${currVerdict} (validator report unavailable)`, evalResult ? formatEvalForValidator(evalResult) : ""]
+      .filter(Boolean)
+      .join("\n\n")
+    await writeLoopFeedback(workspace, loop.loopId, feedback)
+    prevPlanSig = currPlanSig
+    prevVerdict = currVerdict
+  }
+
+  if (!converged) {
+    progress.message(`[${loop.loopId}] did not converge to PASS; leaving the latest attempt in place`)
+    log.warn(`[${loop.loopId}] did not converge to PASS`)
+  }
+}
+
+async function readLoopReport<T>(workspace: Workspace, stepName: string, parse: (text: string) => T): Promise<T | undefined> {
+  try {
+    return parse(await readFile(join(workspace.dir, "reports", `${stepName}.md`), "utf8"))
+  } catch (error) {
+    log.warn(`[loop] couldn't read/parse "${stepName}" report: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
+}
+
+async function writeLoopFeedback(workspace: Workspace, loopId: string, feedback: string) {
+  const path = join(workspace.dir, "loops", loopId, "feedback.md")
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `# Previous attempt — validator findings\n\n${feedback}\n`)
 }
 
 type PreparedPhaseRun = {
@@ -635,6 +779,7 @@ async function runPhaseWithRetries(
   gitLock: GitLock,
   permissions: PermissionGate,
   takeover?: TakeoverContext,
+  validateOutput?: (text: string) => void,
 ) {
   if (!baseline && prepared.maxAttempts > 1) {
     throw new Error(`[${phase.name}] can't retry with dirty working tree; use --max-attempts 1 or clean the repo`)
@@ -651,6 +796,9 @@ async function runPhaseWithRetries(
     log.info(`[${phase.name}] attempt ${attempt}/${prepared.maxAttempts} with ${formatModel(prepared.model)}`)
     try {
       const assistantText = await runPhaseAttempt(workspace, phase, targetDir, prepared, attempt, progress, shutdown, permissions, sessionRef)
+      // A malformed structured report (loop plan/verdict JSON) throws here so the
+      // attempt is treated as a failure and the model is re-asked, up to maxAttempts.
+      if (validateOutput) validateOutput(assistantText)
       if (armed()) {
         // Armed means "this step is mine": even a clean finish waits for the
         // user's decision before the step commits and the pipeline moves on.

@@ -18,9 +18,11 @@ import {
   humanReviewStep,
   humanStepType,
   isHumanStepSpec,
+  isLoopSpec,
   isParallelSpec,
   type AgentStepSpec,
   type HumanStepSpec,
+  type LoopStepSpec,
   type ParallelStepSpec,
   type PipelineSpec,
   type StepSpec,
@@ -521,7 +523,7 @@ export class ConfigEditor {
   private editStepModel(pipelineName: string, index: number) {
     const steps = this.tab().config?.pipelines[pipelineName]?.steps
     const spec = steps?.[index]
-    if (!steps || spec === undefined || isParallelSpec(spec) || isHumanStep(spec) || agentOf(spec) === humanReviewStep) return
+    if (!steps || spec === undefined || isParallelSpec(spec) || isLoopSpec(spec) || isHumanStep(spec) || agentOf(spec) === humanReviewStep) return
     const obj = asStepObject(spec)
     this.openModelPicker(`${pipelineName}[${index + 1}].model`, obj.model, (value) => {
       const next = { ...obj }
@@ -537,7 +539,7 @@ export class ConfigEditor {
     if (meta?.t !== "step") return
     const steps = this.tab().config?.pipelines[meta.pipeline]?.steps
     const spec = steps?.[meta.index]
-    if (!steps || spec === undefined || isParallelSpec(spec) || isHumanStep(spec) || agentOf(spec) === humanReviewStep) return
+    if (!steps || spec === undefined || isParallelSpec(spec) || isLoopSpec(spec) || isHumanStep(spec) || agentOf(spec) === humanReviewStep) return
     const obj = asStepObject(spec)
     this.openInput(`${meta.pipeline}[${meta.index + 1}].maxAttempts`, obj.maxAttempts === undefined ? "" : String(obj.maxAttempts), "positive integer, empty to clear", {
       validate: (value) => (value.trim() === "" || isPositiveInt(value) ? undefined : "must be a positive integer"),
@@ -1052,6 +1054,18 @@ function stepRow(pipeline: string, index: number, spec: StepSpec): Row {
     }
   }
 
+  if (isLoopSpec(spec)) {
+    const label = `loop (${spec.loop.implement.length + 2} phases)`
+    return {
+      meta: { t: "step", pipeline, index },
+      chunks: (selected) => [
+        selected ? fg(theme.accent)("    ▸ ") : raw("      "),
+        fg(theme.faint)(`${index + 1}. `),
+        selected ? bold(fg(theme.text)(label)) : fg(theme.dim)(label),
+      ],
+    }
+  }
+
   const human = isHumanStep(spec) || agentOf(spec) === humanReviewStep
   const agent = isHumanStepSpec(spec) ? (spec.name ?? humanStepType) : agentOf(spec)
   const model = typeof spec === "string" || human ? undefined : spec.model
@@ -1078,15 +1092,15 @@ function setDefault(defaults: ArcherDefaults, key: keyof ArcherDefaults, value: 
 }
 
 function isHumanStep(spec: StepSpec): spec is HumanStepSpec | typeof humanReviewStep | (AgentStepSpec & { agent: typeof humanReviewStep }) {
-  return !isParallelSpec(spec) && (isHumanStepSpec(spec) || agentOf(spec) === humanReviewStep)
+  return !isParallelSpec(spec) && !isLoopSpec(spec) && (isHumanStepSpec(spec) || agentOf(spec) === humanReviewStep)
 }
 
-/** Only meaningful for non-parallel steps; callers must guard with isParallelSpec first. */
-function agentOf(spec: Exclude<StepSpec, ParallelStepSpec | HumanStepSpec>): string {
+/** Only meaningful for plain agent steps; callers must guard with isParallelSpec/isLoopSpec first. */
+function agentOf(spec: Exclude<StepSpec, ParallelStepSpec | HumanStepSpec | LoopStepSpec>): string {
   return typeof spec === "string" ? spec : spec.agent
 }
 
-function asStepObject(spec: Exclude<StepSpec, ParallelStepSpec | HumanStepSpec>): AgentStepSpec {
+function asStepObject(spec: Exclude<StepSpec, ParallelStepSpec | HumanStepSpec | LoopStepSpec>): AgentStepSpec {
   return typeof spec === "string" ? { agent: spec } : { ...spec }
 }
 

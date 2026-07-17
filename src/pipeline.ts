@@ -1,4 +1,5 @@
-import type { AgentSpec, AgentStep, HumanStep, Pipeline, Step } from "./types"
+import type { EvaluationConfig } from "./evaluate"
+import type { AgentSpec, AgentStep, HumanStep, LoopMeta, Pipeline, Step } from "./types"
 
 export const defaultGptModel = "openai/gpt-5.6-terra"
 export const defaultGptVariant = "xhigh"
@@ -153,6 +154,23 @@ export const builtInAgents: readonly AgentSpec[] = [
     readOnly: true,
     builtIn: true,
   },
+  // converge loop: planner synthesizes a typed plan, implementer executes it, validator emits a verdict.
+  {
+    name: "planner",
+    description: "Synthesizes panel findings + validator feedback into one typed JSON implementation plan",
+    defaultModel: defaultOpusModel,
+    temperature: 0.1,
+    readOnly: true,
+    builtIn: true,
+  },
+  {
+    name: "loop-validator",
+    description: "Checks the diff against the plan and emits a PASS/PARTIAL/REJECT verdict as JSON",
+    defaultModel: defaultOpusModel,
+    temperature: 0.1,
+    readOnly: true,
+    builtIn: true,
+  },
 ]
 
 /** Short names accepted in pipeline steps for the built-in agents. */
@@ -196,7 +214,23 @@ export type ParallelStepSpec = {
   parallel: (string | AgentStepSpec)[]
 }
 
-export type StepSpec = string | AgentStepSpec | HumanStepSpec | ParallelStepSpec
+/**
+ * A converging loop: the planner emits a typed plan, the implement step(s) execute it, and the
+ * validator emits a verdict. The runner re-runs the group (feeding the validator's findings back
+ * to the planner) until PASS, `maxIterations`, or the plan stalls. `evaluation` runs build/test
+ * commands whose failure blocks a PASS.
+ */
+export type LoopStepSpec = {
+  loop: {
+    plan: string | AgentStepSpec
+    implement: (string | AgentStepSpec)[]
+    validate: string | AgentStepSpec
+    maxIterations?: number
+    evaluation?: EvaluationConfig
+  }
+}
+
+export type StepSpec = string | AgentStepSpec | HumanStepSpec | ParallelStepSpec | LoopStepSpec
 
 export type PipelineSpec = {
   description?: string
@@ -310,6 +344,21 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
       { agent: "implementation-validator", name: "validator", model: defaultOpusModel, reports: "all" },
     ],
   },
+  converge: {
+    description:
+      "Council-style self-correcting loop: a parallel read-only panel review, then a plan→implement→validate loop that re-plans on the validator's findings until it passes or stalls.",
+    steps: [
+      { parallel: ["patterns", "security", "design"] },
+      {
+        loop: {
+          plan: { agent: "planner", name: "plan", model: defaultOpusModel },
+          implement: [{ agent: "implementer", name: "implement", model: fallbackModel, reports: ["plan"] }],
+          validate: { agent: "loop-validator", name: "validate", model: defaultOpusModel, reports: "all" },
+          maxIterations: 3,
+        },
+      },
+    ],
+  },
 }
 
 /** Splits the `provider/model#variant` shorthand used everywhere a model is configured. */
@@ -346,6 +395,7 @@ export type ResolvePipelineInput = {
 export function resolvePipeline(input: ResolvePipelineInput): Pipeline {
   const steps: Step[] = []
   const agentSteps: AgentStep[] = []
+  const loops: LoopMeta[] = []
   const names = new Set<string>()
   let legacyHumanCount = 0
   let genericHumanCount = 0
@@ -395,6 +445,57 @@ export function resolvePipeline(input: ResolvePipelineInput): Pipeline {
       continue
     }
 
+    if (isLoopSpec(raw)) {
+      const loopId = `loop${index + 1}`
+      const inner = raw.loop
+      const feedbackPath = `loops/${loopId}/feedback.md`
+
+      // Resolve one loop member into a single AgentStep tagged with its loop role. Members
+      // run sequentially (distinct groupIds), so they each form their own batch. The plan
+      // step also reads the validator feedback the runner writes back each iteration
+      // (absent on iteration 1, so `fileParts` skips it).
+      const resolveMember = (spec: string | AgentStepSpec, role: NonNullable<AgentStep["loopRole"]>, subId: string): AgentStep => {
+        const resolved = resolveAgentStepSpec(spec, {
+          input,
+          position: `${position} (${role})`,
+          groupId: `${loopId}-${subId}`,
+          forcedReadOnly: false,
+          priorSteps: agentSteps,
+          claimName: claimAgentName,
+        })
+        if (resolved.length !== 1) {
+          throw new Error(`pipeline "${input.name}": loop step ${position} ${role} can't use a "models:" fan-out`)
+        }
+        const base = resolved[0]!
+        const step: AgentStep = {
+          ...base,
+          loopId,
+          loopRole: role,
+          ...(role === "plan" ? { inputFiles: [...base.inputFiles, feedbackPath] } : {}),
+        }
+        steps.push(step)
+        agentSteps.push(step)
+        return step
+      }
+
+      if (inner.implement.length === 0) {
+        throw new Error(`pipeline "${input.name}": loop step ${position} needs at least one implement step`)
+      }
+      const plan = resolveMember(inner.plan, "plan", "plan")
+      const implementSteps = inner.implement.map((member, memberIndex) => resolveMember(member, "implement", `impl${memberIndex + 1}`))
+      const validate = resolveMember(inner.validate, "validate", "validate")
+
+      loops.push({
+        loopId,
+        maxIterations: Math.max(1, inner.maxIterations ?? 3),
+        planName: plan.name,
+        validateName: validate.name,
+        stepNames: [plan.name, ...implementSteps.map((step) => step.name), validate.name],
+        ...(inner.evaluation ? { evaluation: inner.evaluation } : {}),
+      })
+      continue
+    }
+
     const humanSpec = asHumanStepSpec(raw)
     if (humanSpec) {
       const isLegacy = "agent" in humanSpec
@@ -431,11 +532,20 @@ export function resolvePipeline(input: ResolvePipelineInput): Pipeline {
     throw new Error(`pipeline "${input.name}" has no agent steps`)
   }
 
-  return { name: input.name, ...(input.spec.description ? { description: input.spec.description } : {}), steps }
+  return {
+    name: input.name,
+    ...(input.spec.description ? { description: input.spec.description } : {}),
+    steps,
+    ...(loops.length > 0 ? { loops } : {}),
+  }
 }
 
 export function isParallelSpec(raw: StepSpec): raw is ParallelStepSpec {
   return typeof raw === "object" && raw !== null && "parallel" in raw
+}
+
+export function isLoopSpec(raw: StepSpec): raw is LoopStepSpec {
+  return typeof raw === "object" && raw !== null && "loop" in raw
 }
 
 export function isHumanStepSpec(raw: StepSpec): raw is HumanStepSpec {

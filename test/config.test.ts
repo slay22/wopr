@@ -20,7 +20,7 @@ import {
   writeDefaultArcherConfig,
   writeDefaultProjectConfig,
 } from "../src/config"
-import { builtInAgents, defaultGptModel, defaultGptVariant, defaultImplementReviewModel, defaultOpusModel, isHumanStepSpec, isParallelSpec } from "../src/pipeline"
+import { builtInAgents, defaultGptModel, defaultGptVariant, defaultImplementReviewModel, defaultOpusModel, isHumanStepSpec, isLoopSpec, isParallelSpec } from "../src/pipeline"
 
 const dirs: string[] = []
 
@@ -342,6 +342,8 @@ describe("agent registry", () => {
       "implementation-final-review",
       "implementation-fixer",
       "implementation-validator",
+      "planner",
+      "loop-validator",
     ])
   })
 })
@@ -355,7 +357,7 @@ describe("pipeline selection", () => {
     expect(selectPipelineSpec(config, "implement").steps).toEqual(["tests"])
     expect(selectPipelineSpec(undefined, "implement").steps.length).toBeGreaterThan(1)
     expect(() => selectPipelineSpec(config, "ghost")).toThrow(
-      'unknown pipeline "ghost" (available: implement, implement-lite, quick, refine, review, review-lite, ultra-implement, ultra-refine)',
+      'unknown pipeline "ghost" (available: converge, implement, implement-lite, quick, refine, review, review-lite, ultra-implement, ultra-refine)',
     )
     expect(() => selectPipelineSpec(config, "ghost")).toThrow(ConfigError)
   })
@@ -457,8 +459,8 @@ describe("serialization", () => {
     const template = defaultConfigTemplate()
     expect(template.defaults.model).toBe(`${defaultGptModel}#${defaultGptVariant}`)
     const steps = template.pipelines.implement!.steps
-    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && !isHumanStepSpec(step) && step.agent === "design")).toEqual({ agent: "design", model: defaultImplementReviewModel })
-    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && !isHumanStepSpec(step) && step.agent === "adversarial")).toEqual({ agent: "adversarial", model: defaultImplementReviewModel, reports: "all" })
+    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && !isLoopSpec(step) && !isHumanStepSpec(step) && step.agent === "design")).toEqual({ agent: "design", model: defaultImplementReviewModel })
+    expect(steps.find((step) => typeof step !== "string" && !isParallelSpec(step) && !isLoopSpec(step) && !isHumanStepSpec(step) && step.agent === "adversarial")).toEqual({ agent: "adversarial", model: defaultImplementReviewModel, reports: "all" })
     const reparsed = parse(serializeArcherConfig(template))
     expect(reparsed.defaults).toEqual(template.defaults)
     expect(reparsed.pipelines).toEqual(template.pipelines)

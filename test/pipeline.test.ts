@@ -20,6 +20,56 @@ const resolve = (spec: PipelineSpec, defaultModel?: string) =>
 
 const agentSteps = (spec: PipelineSpec) => resolve(spec).steps.filter((step): step is AgentStep => step.type === "agent")
 
+describe("converge loop resolution", () => {
+  const spec: PipelineSpec = {
+    steps: [
+      { parallel: ["patterns", "security"] },
+      {
+        loop: {
+          plan: { agent: "planner", name: "plan" },
+          implement: [{ agent: "implementer", name: "implement", reports: ["plan"] }],
+          validate: { agent: "loop-validator", name: "validate", reports: "all" },
+          maxIterations: 4,
+          evaluation: { test: "bun test" },
+        },
+      },
+    ],
+  }
+
+  test("expands the loop into flat, sequential, role-tagged phases", () => {
+    const pipeline = resolve(spec)
+    const loopSteps = pipeline.steps.filter((step): step is AgentStep => step.type === "agent" && step.loopId !== undefined)
+    expect(loopSteps.map((step) => [step.name, step.loopRole])).toEqual([
+      ["plan", "plan"],
+      ["implement", "implement"],
+      ["validate", "validate"],
+    ])
+    // Distinct groupIds so planBatches keeps them sequential (never batched together).
+    expect(new Set(loopSteps.map((step) => step.groupId)).size).toBe(3)
+  })
+
+  test("records loop metadata and wires the planner's feedback input", () => {
+    const pipeline = resolve(spec)
+    expect(pipeline.loops).toHaveLength(1)
+    const meta = pipeline.loops![0]!
+    expect(meta).toMatchObject({ maxIterations: 4, planName: "plan", validateName: "validate", stepNames: ["plan", "implement", "validate"], evaluation: { test: "bun test" } })
+    const plan = pipeline.steps.find((step): step is AgentStep => step.type === "agent" && step.name === "plan")!
+    expect(plan.inputFiles).toContain(`loops/${meta.loopId}/feedback.md`)
+  })
+
+  test("rejects a models: fan-out inside a loop member", () => {
+    expect(() =>
+      resolve({ steps: [{ loop: { plan: { agent: "planner", models: ["a/b", "c/d"] }, implement: ["implementer"], validate: "loop-validator" } }] }),
+    ).toThrow(/can't use a "models:" fan-out/)
+  })
+
+  test("the built-in converge pipeline resolves", () => {
+    const pipeline = resolvePipeline({ name: "converge", spec: builtInPipelines.converge!, agents: builtInAgents })
+    expect(pipeline.loops).toHaveLength(1)
+    expect(pipeline.loops![0]!.stepNames).toEqual(["plan", "implement", "validate"])
+  })
+})
+
 describe("model shorthand", () => {
   test("splits provider/model#variant", () => {
     expect(splitModelVariant("openai/gpt-5.5#xhigh")).toEqual({ model: "openai/gpt-5.5", variant: "xhigh" })

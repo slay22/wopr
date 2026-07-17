@@ -1,3 +1,5 @@
+import type { EvaluationConfig } from "./evaluate"
+
 export type RunOptions = {
   prompt: string
   files: string[]
@@ -98,6 +100,9 @@ export type AgentStep = {
   groupId: string
   /** Pre-fan-out logical name; equals `name` unless this step was produced by a `models:` fan-out. */
   stepName: string
+  /** Set on the steps of a converge-loop group; the runner re-runs them until the validator passes or the loop stalls. */
+  loopId?: string
+  loopRole?: "plan" | "implement" | "validate"
 }
 
 export type HumanStep = {
@@ -108,8 +113,22 @@ export type HumanStep = {
 
 export type Step = AgentStep | HumanStep
 
+/** Control data for one converge-loop group, resolved alongside the flat step list. */
+export type LoopMeta = {
+  loopId: string
+  maxIterations: number
+  /** Step name of the plan phase (parsed for the plan signature + fed the feedback file). */
+  planName: string
+  /** Step name of the validate phase (parsed for the verdict). */
+  validateName: string
+  /** All step names in the loop, in run order. */
+  stepNames: string[]
+  evaluation?: EvaluationConfig
+}
+
 export type Pipeline = {
   name: string
   description?: string
   steps: Step[]
+  loops?: LoopMeta[]
 }

@@ -16,6 +16,7 @@ import {
   humanStepType,
   humanReviewStep,
   isHumanStepSpec,
+  isLoopSpec,
   readOnlyAgentSuffix,
   splitModelVariant,
   type AgentStepSpec,
@@ -644,6 +645,17 @@ function templatePipeline(spec: PipelineSpec, globalModel: string): PipelineSpec
 function templateStep(raw: StepSpec, globalModel: string): StepSpec {
   if (typeof raw === "object" && raw !== null && "parallel" in raw) {
     return { parallel: raw.parallel.map((inner) => templateStep(inner, globalModel) as string | AgentStepSpec) }
+  }
+  if (isLoopSpec(raw)) {
+    const inner = raw.loop
+    return {
+      loop: {
+        ...inner,
+        plan: templateStep(inner.plan, globalModel) as string | AgentStepSpec,
+        implement: inner.implement.map((member) => templateStep(member, globalModel) as string | AgentStepSpec),
+        validate: templateStep(inner.validate, globalModel) as string | AgentStepSpec,
+      },
+    }
   }
   if (isHumanStepSpec(raw) || raw === humanReviewStep) return raw
   const step = typeof raw === "string" ? { agent: raw } : { ...raw }
