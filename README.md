@@ -36,7 +36,7 @@ PRD ──► implementer ──► patterns ──► security ──► design
                                           commit per phase
 ```
 
-| Step | Agent | Model | What it does |
+| Step | Agent | Default model | What it does |
 |---|---|---|---|
 | `implementer` | `implementer` | `openai/gpt-5.6-terra#xhigh` | Implements the feature respecting repo patterns |
 | `patterns` | `pattern-auditor` | `openai/gpt-5.6-terra#xhigh` | Refactors without changing behavior, aligns with the rest of the code |
@@ -44,6 +44,8 @@ PRD ──► implementer ──► patterns ──► security ──► design
 | `design` | `design-polisher` | `openrouter/z-ai/glm-5.2` | Polishes UI following the repo's design system |
 | `tests` | `test-engineer` | `openai/gpt-5.6-terra#xhigh` | Automated tests + relevant E2E/integration coverage |
 | `adversarial` | `adversarial-reviewer` | `openrouter/z-ai/glm-5.2` | Final adversarial review before PR creation |
+
+The **Default model** column is exactly that — a default. WOPR is model-agnostic: every step runs on whatever model you point it at, from any provider you've authenticated in [pi](https://github.com/earendil-works/pi), and you can mix providers within one run. Override any of these per-step in `.wopr/config.yaml`, globally with `defaults.model`, or for a whole run with `--model`. The pairing that ships — a strong reasoning model for the build/audit/test phases, a cheaper one for design and adversarial review — is just a sensible starting point, not a requirement.
 
 ## The converge loop: `converge`
 
@@ -78,13 +80,13 @@ WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). 
 | Pipeline | Changes code? | What it does |
 |---|---|---|
 | `implement` | yes | **The default** (runs with no `-p`). Implement a PRD, then audit, polish, test, and adversarial review (the table above). |
-| `implement-lite` | yes | Same workflow and agents as `implement`, but swaps the GPT 5.6 Terra xhigh phases (`implementer`, `patterns`, `security`, `tests`) to `openrouter/z-ai/glm-5.2` for a lower-cost implementation run. |
+| `implement-lite` | yes | Same workflow and agents as `implement`, but runs the heavy phases (`implementer`, `patterns`, `security`, `tests`) on a lower-cost model instead of the high-end default, for a cheaper implementation run. |
 | `ultra-implement` | yes | Like `implement`, but the pattern/security/adversarial reviews of the initial diff run in parallel across two models feeding a triage step, and the run ends with an audit-only final review, a fixer that applies only blocking findings, and a final validator. |
 | `refine` | yes | Audit the current diff (scope → bugs → clean-code → security), triage the findings adversarially, apply the accepted fixes, then validate them. |
 | `ultra-refine` | yes | Like `refine`, but every read-only audit is fanned out across two models before triage, fixes, and validation. |
 | `converge` | yes | **Self-correcting.** A parallel read-only panel review (patterns / security / design), then a plan→implement→validate loop that re-plans on the validator's findings until it passes, stalls, or hits `maxIterations` (see [The converge loop](#the-converge-loop-converge)). |
 | `review` | **no — report only** | Scope the diff, run the bug / clean-code(+patterns) / security audits **in parallel across two models each**, then a single step synthesizes everything into one prioritized findings report. Makes no changes; the run's output is `reports/report.md`, which you read to decide whether to follow up with a `refine` run. |
-| `review-lite` | **no — report only** | Same as `review`, but scope and the first audit model swap from Opus / GPT 5.6 Terra xhigh to `openrouter/z-ai/glm-5.2`; the second parallel audit model and the final report stay on Opus 4.8. |
+| `review-lite` | **no — report only** | Same as `review`, but the scope step and first audit model drop to a lower-cost model; the second parallel audit model and the final report stay on the high-end default. |
 
 `refine`/`ultra-refine` are the change-applying counterparts of `review`: run `review` first to get a report, then `refine` if you want the fixes applied.
 
@@ -105,7 +107,7 @@ pi models                # list the models your configured providers expose
 
 Models are addressed as `provider/model` everywhere WOPR takes one (config, `--model`, per-step). A trailing `#variant` maps onto pi's **reasoning effort** (thinking level) — one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — so `openai/gpt-5.6-terra#xhigh` means that model at `xhigh` thinking. Any model pi knows about, from any provider you've authenticated, can be mixed within a single run.
 
-WOPR's default `implement` pipeline uses `openai/gpt-5.6-terra#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
+**You decide the models — WOPR only ships defaults.** The default `implement` pipeline pairs a strong reasoning model for the implement, pattern, security, and test phases with a cheaper one for design and adversarial review (the exact defaults are in the [pipeline table above](#the-default-pipeline-implement)). Change any of them per-step in config, set your own `defaults.model`, or override a whole run with `--model`; `implement-lite` is the same pipeline with the heavy phases moved to the cheaper model.
 
 ## Installation
 
