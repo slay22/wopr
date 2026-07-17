@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type ArcherDefaults } from "./config"
+import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type WoprDefaults } from "./config"
 import { detectBaseRef } from "./git"
 import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
@@ -13,7 +13,7 @@ import { isValidRunID } from "./workspace"
 /**
  * Flags as written: every scalar stays undefined until the user sets it, so
  * resolveRunOptions can tell "flag given" from "flag at its default" and apply
- * the precedence chain flag > .archer/config.yaml defaults > built-in default.
+ * the precedence chain flag > .wopr/config.yaml defaults > built-in default.
  */
 export type ParsedArgs = {
   prompt?: string
@@ -97,7 +97,7 @@ async function launchInteractiveRun(targetDir: string) {
   const { launchRunTui } = await import("./launch-tui")
   // The launcher is home: runs/config are sub-screens you back out of into the
   // launcher, so quitting them (or finding no runs) returns here rather than
-  // exiting archer. Only launching or resuming a run is terminal.
+  // exiting wopr. Only launching or resuming a run is terminal.
   for (;;) {
     const selection = await launchRunTui({ targetDir })
     if (!selection) return
@@ -174,12 +174,12 @@ async function resumeOptions(runID: string, targetDir?: string): Promise<RunOpti
 export async function parseCommand(argv: string[]): Promise<CliCommand> {
   if (argv[0] === "runs") {
     const rest = argv.slice(1)
-    if (rest.length > 1) throw new Error("usage: archer runs [run-id]")
+    if (rest.length > 1) throw new Error("usage: wopr runs [run-id]")
     if (rest[0] !== undefined && !isValidRunID(rest[0])) throw new Error(`invalid run id: ${rest[0]}`)
     return { type: "runs", runID: rest[0] }
   }
   if (argv[0] === "config") {
-    if (argv.length > 1) throw new Error("usage: archer config")
+    if (argv.length > 1) throw new Error("usage: wopr config")
     return { type: "config", targetDir: process.cwd() }
   }
   if (argv[0] === "init") {
@@ -223,7 +223,7 @@ function parseInitArgs(argv: string[]): ParsedInitArgs {
 
   for (let i = 0; i < argv.length; i++) {
     const raw = argv[i]!
-    if (!raw.startsWith("-")) throw new Error("usage: archer init [--global] [--force] [--dir <path>]")
+    if (!raw.startsWith("-")) throw new Error("usage: wopr init [--global] [--force] [--dir <path>]")
 
     const { flag, value } = splitFlag(raw)
     const noValue = () => {
@@ -269,7 +269,7 @@ function parseInitArgs(argv: string[]): ParsedInitArgs {
 
 /** Applies the precedence chain and resolves the pipeline the run will execute. */
 export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOptions, "prompt">> {
-  const config = await loadMergedArcherConfig(parsed.targetDir)
+  const config = await loadMergedWoprConfig(parsed.targetDir)
   const defaults = config?.defaults ?? {}
 
   const humanReview = parsed.humanReview ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
@@ -327,7 +327,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
 
 // Base source: flag > config defaults.baseRef > auto-detection (never persisted).
 // An explicit base that doesn't exist stays a hard error in ensureRepoReady.
-async function resolveBaseRef(parsed: ParsedArgs, defaults: ArcherDefaults): Promise<string> {
+async function resolveBaseRef(parsed: ParsedArgs, defaults: WoprDefaults): Promise<string> {
   const explicit = parsed.baseRef ?? defaults.baseRef
   if (explicit) return explicit
   const detected = await detectBaseRef(parsed.baseDetectionDir ?? parsed.targetDir)
@@ -462,27 +462,27 @@ function listValue(value: string) {
 }
 
 function help() {
-  return `archer [prompt]
+  return `wopr [prompt]
 
 Sequential coding-agent pipeline for implementing features.
 
 Usage:
-  archer
-  archer "Add onboarding"
-  archer --prompt-file prd.md --file lib/onboarding --file test/onboarding_test.dart
-  archer --pipeline bug-fix --prompt-file bug.md
-  archer init
-  archer runs [run-id]
-  archer config
+  wopr
+  wopr "Add onboarding"
+  wopr --prompt-file prd.md --file lib/onboarding --file test/onboarding_test.dart
+  wopr --pipeline bug-fix --prompt-file bug.md
+  wopr init
+  wopr runs [run-id]
+  wopr config
 
 Commands:
-  archer                   Open an interactive TUI launcher to pick a pipeline,
+  wopr                   Open an interactive TUI launcher to pick a pipeline,
                            enter a prompt, and toggle run options
-  init                     Create .archer/config.yaml and .archer/agents/*.md in the target repo
-  init --global            Create ~/.archer/config.yaml and ~/.archer/agents/*.md
+  init                     Create .wopr/config.yaml and .wopr/agents/*.md in the target repo
+  init --global            Create ~/.wopr/config.yaml and ~/.wopr/agents/*.md
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
-                           or open a subshell in its run dir (under ~/.archer/runs)
-  config                   View and edit the global (~/.archer) and current project config in a TUI
+                           or open a subshell in its run dir (under ~/.wopr/runs)
+  config                   View and edit the global (~/.wopr) and current project config in a TUI
 
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
@@ -509,8 +509,8 @@ Flags:
   --dir <path>             Target repo (default: cwd)
 
 Config files:
-  ~/.archer/config.yaml    user defaults, created by make install or archer init --global
-  .archer/config.yaml      project-local overrides, created by archer init
+  ~/.wopr/config.yaml    user defaults, created by make install or wopr init --global
+  .wopr/config.yaml      project-local overrides, created by wopr init
   agents/*.md              Markdown prompts loaded by matching the agent name
 
 Config keys:
@@ -520,19 +520,19 @@ Config keys:
   permissions:             allow/deny additions to the bash policy (deny always wins)
   hooks:                   pre/post shell commands, globally or per pipeline
   attachments:             files attached to every step
-  The same schema lives globally at ~/.archer/config.yaml; project config merges on top.
+  The same schema lives globally at ~/.wopr/config.yaml; project config merges on top.
   Precedence: CLI flags > project config > global config > built-in defaults.
 `
 }
 
 function initHelp() {
-  return `archer init [--global] [--force] [--dir <path>]
+  return `wopr init [--global] [--force] [--dir <path>]
 
-Create Archer's default config file and agent prompt Markdown files. Existing files are not overwritten unless --force is set.
+Create WOPR's default config file and agent prompt Markdown files. Existing files are not overwritten unless --force is set.
 
 Options:
-  --global                 Write ~/.archer/config.yaml instead of a project config
-  --dir <path>             Target repo for .archer/config.yaml (default: cwd)
+  --global                 Write ~/.wopr/config.yaml instead of a project config
+  --dir <path>             Target repo for .wopr/config.yaml (default: cwd)
   --force                  Overwrite an existing config file
   --quiet                  Suppress status output
 `

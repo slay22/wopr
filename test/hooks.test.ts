@@ -16,8 +16,8 @@ afterAll(async () => {
 })
 
 async function hookContext() {
-  const targetDir = await mkdtemp(join(tmpdir(), "archer-hooks-target-"))
-  const runDir = await mkdtemp(join(tmpdir(), "archer-hooks-run-"))
+  const targetDir = await mkdtemp(join(tmpdir(), "wopr-hooks-target-"))
+  const runDir = await mkdtemp(join(tmpdir(), "wopr-hooks-run-"))
   dirs.push(targetDir, runDir)
   return {
     workspace: { dir: runDir, runID: "20260101-000000-hook" } as Workspace,
@@ -45,10 +45,10 @@ describe("hooks", () => {
     expect(hooksForPipeline(config, "review")).toEqual({ pre: [{ command: "global-pre" }], post: [{ command: "global-post" }] })
   })
 
-  test("runs hooks from the target repo with Archer environment variables", async () => {
+  test("runs hooks from the target repo with WOPR environment variables", async () => {
     const context = await hookContext()
 
-    await runHooks("pre", [{ command: 'printf "%s:%s:%s" "$ARCHER_PIPELINE" "$ARCHER_HOOK_STAGE" "$ARCHER_RUN_ID" > hook.out' }], context)
+    await runHooks("pre", [{ command: 'printf "%s:%s:%s" "$WOPR_PIPELINE" "$WOPR_HOOK_STAGE" "$WOPR_RUN_ID" > hook.out' }], context)
 
     expect(await readFile(join(context.targetDir, "hook.out"), "utf8")).toBe("implement:pre:20260101-000000-hook")
   })

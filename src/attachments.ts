@@ -6,7 +6,7 @@ import { log } from "./log"
 type MissingMode = "skip" | "error"
 
 // OpenCode accepted rich file "parts" in a prompt; pi's prompt() takes text (and
-// images). archer's attachments are its own reports, pre-diffs, and project
+// images). wopr's attachments are its own reports, pre-diffs, and project
 // context files — all text — so we inline their content into the prompt.
 // ponytail: text only; binary/image attachments are skipped with a warning.
 // Add pi ImageContent handling if image attachments become a real need.

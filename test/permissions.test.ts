@@ -29,7 +29,7 @@ function bash(command: string): ToolCallEvent {
 }
 
 async function decideBash(command: string, options: Partial<StartGateOptions> = {}) {
-  const handler = toolCallHandler({ interactive: true, directory: "/tmp/non-existent-archer-target", ...options })
+  const handler = toolCallHandler({ interactive: true, directory: "/tmp/non-existent-wopr-target", ...options })
   return (await handler(bash(command))) ?? {}
 }
 

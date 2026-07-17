@@ -3,7 +3,7 @@
 // (its Verdict). Both are parsed out of the agent's final report text — a JSON
 // block if the agent fenced one, else the last balanced {...} object — and then
 // structurally validated. A parse/validation failure is thrown, so the phase's
-// existing maxAttempts re-asks the model. No zod (archer has no such dep); the
+// existing maxAttempts re-asks the model. No zod (wopr has no such dep); the
 // validators are hand-rolled.
 
 export type ActionType = "create" | "modify" | "delete" | "refactor" | "test"

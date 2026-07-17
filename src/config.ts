@@ -25,14 +25,14 @@ import {
   type StepSpec,
 } from "./pipeline"
 import type { AgentSpec, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
-import { archerHome, archerRoot, globalConfigPath } from "./workspace"
+import { woprHome, woprRoot, globalConfigPath } from "./workspace"
 
 /**
- * Project configuration loaded from .archer/config.yaml. Everything is
- * optional: the file only declares what differs from archer's defaults.
+ * Project configuration loaded from .wopr/config.yaml. Everything is
+ * optional: the file only declares what differs from wopr's defaults.
  */
-export type ArcherConfig = {
-  defaults: ArcherDefaults
+export type WoprConfig = {
+  defaults: WoprDefaults
   agents: Record<string, ConfigAgent>
   pipelines: Record<string, PipelineSpec>
   permissions: PermissionAdditions
@@ -40,7 +40,7 @@ export type ArcherConfig = {
   attachments: string[]
 }
 
-export type ArcherDefaults = {
+export type WoprDefaults = {
   model?: string
   maxAttempts?: number
   baseRef?: string
@@ -69,35 +69,35 @@ export class ConfigError extends Error {
 
 const configFileNames = ["config.yaml", "config.yml"]
 
-export async function loadArcherConfig(targetDir: string): Promise<ArcherConfig | undefined> {
+export async function loadWoprConfig(targetDir: string): Promise<WoprConfig | undefined> {
   for (const fileName of configFileNames) {
-    const path = join(targetDir, ".archer", fileName)
+    const path = join(targetDir, ".wopr", fileName)
     let body: string
     try {
       body = await readFile(path, "utf8")
     } catch {
       continue
     }
-    return parseArcherConfig(body, `.archer/${fileName}`, targetDir)
+    return parseWoprConfig(body, `.wopr/${fileName}`, targetDir)
   }
   return undefined
 }
 
 /**
- * The per-user config at ~/.archer/config.yaml. Parsed with targetDir set to
- * archerRoot() — the directory that holds `.archer` — so agent-prompt validation
- * resolves to ~/.archer/agents/<name>.md, exactly like a project repo.
+ * The per-user config at ~/.wopr/config.yaml. Parsed with targetDir set to
+ * woprRoot() — the directory that holds `.wopr` — so agent-prompt validation
+ * resolves to ~/.wopr/agents/<name>.md, exactly like a project repo.
  */
-export async function loadGlobalArcherConfig(): Promise<ArcherConfig | undefined> {
+export async function loadGlobalWoprConfig(): Promise<WoprConfig | undefined> {
   for (const fileName of configFileNames) {
-    const path = join(archerHome(), fileName)
+    const path = join(woprHome(), fileName)
     let body: string
     try {
       body = await readFile(path, "utf8")
     } catch {
       continue
     }
-    return parseArcherConfig(body, `~/.archer/${fileName}`, archerRoot())
+    return parseWoprConfig(body, `~/.wopr/${fileName}`, woprRoot())
   }
   return undefined
 }
@@ -108,7 +108,7 @@ export async function loadGlobalArcherConfig(): Promise<ArcherConfig | undefined
  * attachments concatenate (global first). deny still wins over allow in
  * bashPolicy, so the concatenation order is irrelevant there.
  */
-export function mergeArcherConfigs(global: ArcherConfig | undefined, project: ArcherConfig | undefined): ArcherConfig | undefined {
+export function mergeWoprConfigs(global: WoprConfig | undefined, project: WoprConfig | undefined): WoprConfig | undefined {
   if (!global) return project
   if (!project) return global
   return {
@@ -125,9 +125,9 @@ export function mergeArcherConfigs(global: ArcherConfig | undefined, project: Ar
 }
 
 /** The effective config for a run: global merged under the project config. */
-export async function loadMergedArcherConfig(targetDir: string): Promise<ArcherConfig | undefined> {
-  const [global, project] = await Promise.all([loadGlobalArcherConfig(), loadArcherConfig(targetDir)])
-  return mergeArcherConfigs(global, project)
+export async function loadMergedWoprConfig(targetDir: string): Promise<WoprConfig | undefined> {
+  const [global, project] = await Promise.all([loadGlobalWoprConfig(), loadWoprConfig(targetDir)])
+  return mergeWoprConfigs(global, project)
 }
 
 export function emptyHooksConfig(): HooksConfig {
@@ -152,21 +152,21 @@ function mergeHookSet(global: HookSet, project: HookSet): HookSet {
 }
 
 /**
- * The commented YAML template written by `archer init`. It documents every key
+ * The commented YAML template written by `wopr init`. It documents every key
  * (commented out) and inlines the built-in `implement` pipeline so it's an
  * immediately editable starting point. Unlike `defaultConfigTemplate` (used by
  * the TUI's initialize action), this is a human-readable string with comments.
  */
-export const defaultArcherConfig = `# Archer configuration.
-# Global default path: ~/.archer/config.yaml
-# Project override path: .archer/config.yaml
+export const defaultWoprConfig = `# WOPR configuration.
+# Global default path: ~/.wopr/config.yaml
+# Project override path: .wopr/config.yaml
 
 version: 1
 
 defaults:
   # model: openai/gpt-5.6-terra#xhigh # optional: uncomment to force every agent unless a step/agent overrides it
   # maxAttempts: 2
-  # baseRef: main # optional: when unset, archer auto-detects (origin default branch, else main/master/develop/trunk, else current branch)
+  # baseRef: main # optional: when unset, wopr auto-detects (origin default branch, else main/master/develop/trunk, else current branch)
   # pipeline: implement
   # branchNameModel: anthropic/claude-haiku-4-5 # optional: model that names worktree branches
 
@@ -186,7 +186,7 @@ defaults:
 #     description: Reviews API consistency
 #     model: openai/gpt-5.6-terra#xhigh
 
-# Archer ships these pipelines built in; pick one with -p/--pipeline without redeclaring it here:
+# WOPR ships these pipelines built in; pick one with -p/--pipeline without redeclaring it here:
 #   implement            the default: build the feature, then audit, polish, test, and adversarial review
 #   implement-lite       like implement, but swaps GPT 5.6 Terra xhigh phases for GLM 5.2
 #   ultra-implement      like implement, with dual-model parallel audits and a final review/fix/validate stage
@@ -213,9 +213,9 @@ pipelines:
 
 # Optional shell hooks. Top-level hooks run for every pipeline; hooks under
 # hooks.pipelines.<name> are appended only for that pipeline. Commands run from
-# the target repo by default with ARCHER_* environment variables available
-# (ARCHER_RUN_ID, ARCHER_RUN_DIR, ARCHER_TARGET_DIR, ARCHER_PIPELINE,
-# ARCHER_RUN_STATUS for post-hooks, etc.). Post-hook "when" defaults to success.
+# the target repo by default with WOPR_* environment variables available
+# (WOPR_RUN_ID, WOPR_RUN_DIR, WOPR_TARGET_DIR, WOPR_PIPELINE,
+# WOPR_RUN_STATUS for post-hooks, etc.). Post-hook "when" defaults to success.
 # hooks:
 #   pre:
 #     - pnpm lint
@@ -245,21 +245,21 @@ export type ConfigWriteResult = {
 
 /** Path of the project config file (default name). */
 export function projectConfigPath(targetDir: string) {
-  return join(targetDir, ".archer", "config.yaml")
+  return join(targetDir, ".wopr", "config.yaml")
 }
 
 /** Re-exported from workspace so callers don't need both modules. */
 export { globalConfigPath }
 
-/** Writes the global config at ~/.archer/config.yaml (plus default agent prompts). */
+/** Writes the global config at ~/.wopr/config.yaml (plus default agent prompts). */
 export async function writeDefaultGlobalConfig(force = false): Promise<ConfigWriteResult> {
-  return writeDefaultArcherConfig(globalConfigPath(), force)
+  return writeDefaultWoprConfig(globalConfigPath(), force)
 }
 
-/** Writes a project config at <targetDir>/.archer/config.yaml (plus default agent prompts). */
+/** Writes a project config at <targetDir>/.wopr/config.yaml (plus default agent prompts). */
 export async function writeDefaultProjectConfig(targetDir: string, force = false): Promise<ConfigWriteResult> {
   await assertDirectory(targetDir)
-  return writeDefaultArcherConfig(projectConfigPath(targetDir), force)
+  return writeDefaultWoprConfig(projectConfigPath(targetDir), force)
 }
 
 /**
@@ -268,12 +268,12 @@ export async function writeDefaultProjectConfig(targetDir: string, force = false
  * `force` is set. Agent prompts live next to the config file under `agents/`,
  * mirroring how the loader discovers them.
  */
-export async function writeDefaultArcherConfig(path: string, force = false): Promise<ConfigWriteResult> {
+export async function writeDefaultWoprConfig(path: string, force = false): Promise<ConfigWriteResult> {
   const configDir = dirname(path)
   await mkdir(configDir, { recursive: true })
   await writeDefaultAgentPrompts(configDir, force)
   try {
-    await writeFile(path, defaultArcherConfig, { flag: force ? "w" : "wx" })
+    await writeFile(path, defaultWoprConfig, { flag: force ? "w" : "wx" })
     return { path, created: true }
   } catch (error) {
     if (!force && isErrno(error, "EEXIST")) return { path, created: false }
@@ -311,7 +311,7 @@ function isErrno(error: unknown, code: string) {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code
 }
 
-export function parseArcherConfig(body: string, source: string, targetDir: string): ArcherConfig {
+export function parseWoprConfig(body: string, source: string, targetDir: string): WoprConfig {
   let raw: unknown
   try {
     raw = Bun.YAML.parse(body)
@@ -319,16 +319,16 @@ export function parseArcherConfig(body: string, source: string, targetDir: strin
     throw new ConfigError(`${source}: invalid YAML: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  const config: ArcherConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [] }
+  const config: WoprConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [] }
   if (raw === null || raw === undefined) return config
 
   const v = new Validator(source)
   const root = v.record(raw, "")
   // Unknown keys warn instead of failing so configs written for a newer
-  // archer still load; typos surface in the warning either way.
+  // wopr still load; typos surface in the warning either way.
   v.knownKeys(root, "", ["version", "defaults", "agents", "pipelines", "permissions", "hooks", "attachments"])
 
-  if (root.version !== undefined && root.version !== 1) v.fail("version", `unsupported value ${JSON.stringify(root.version)}; this archer reads version 1`)
+  if (root.version !== undefined && root.version !== 1) v.fail("version", `unsupported value ${JSON.stringify(root.version)}; this wopr reads version 1`)
 
   if (root.defaults !== undefined && root.defaults !== null) config.defaults = validateDefaults(v, root.defaults)
   if (root.agents !== undefined) config.agents = validateAgents(v, root.agents, targetDir)
@@ -340,11 +340,11 @@ export function parseArcherConfig(body: string, source: string, targetDir: strin
   return config
 }
 
-function validateDefaults(v: Validator, raw: unknown): ArcherDefaults {
+function validateDefaults(v: Validator, raw: unknown): WoprDefaults {
   const record = v.record(raw, "defaults")
   v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "autoAcceptJudgeModel", "branchNameModel"])
 
-  const defaults: ArcherDefaults = {}
+  const defaults: WoprDefaults = {}
   if (record.model !== undefined) defaults.model = v.model(record.model, "defaults.model")
   if (record.maxAttempts !== undefined) defaults.maxAttempts = v.positiveInt(record.maxAttempts, "defaults.maxAttempts")
   if (record.baseRef !== undefined) defaults.baseRef = v.nonEmptyString(record.baseRef, "defaults.baseRef")
@@ -362,7 +362,7 @@ function validateAgents(v: Validator, raw: unknown, targetDir: string): Record<s
     const path = `agents.${name}`
     if (name === humanReviewStep) v.fail(path, `"${humanReviewStep}" is a reserved step keyword, not an agent`)
     if (agentAliases[name]) v.fail(path, `"${name}" is an alias of the built-in agent "${agentAliases[name]}"; use that name to override it`)
-    if (name.endsWith(readOnlyAgentSuffix)) v.fail(path, `agent names can't end in "${readOnlyAgentSuffix}"; that suffix is reserved for archer's forced-read-only variants`)
+    if (name.endsWith(readOnlyAgentSuffix)) v.fail(path, `agent names can't end in "${readOnlyAgentSuffix}"; that suffix is reserved for wopr's forced-read-only variants`)
 
     const entry = v.record(value, path)
     v.knownKeys(entry, path, ["description", "model", "temperature", "readOnly"])
@@ -377,7 +377,7 @@ function validateAgents(v: Validator, raw: unknown, targetDir: string): Record<s
     // (optionally replaced via the same path). Fail at load, not mid-run.
     const builtIn = builtInAgents.some((candidate) => candidate.name === name)
     if (!builtIn && !isFile(projectAgentPromptPath(name, targetDir))) {
-      v.fail(path, `agent "${name}" needs a prompt at .archer/agents/${name}.md`)
+      v.fail(path, `agent "${name}" needs a prompt at .wopr/agents/${name}.md`)
     }
 
     agents[name] = agent
@@ -533,7 +533,7 @@ function validateHookWhen(v: Validator, raw: unknown, path: string): HookWhen {
 }
 
 /** Built-in agents plus the project's additions and overrides. */
-export function buildAgentRegistry(config?: ArcherConfig): AgentSpec[] {
+export function buildAgentRegistry(config?: WoprConfig): AgentSpec[] {
   const registry: AgentSpec[] = builtInAgents.map((agent) => ({ ...agent }))
   if (!config) return registry
 
@@ -559,7 +559,7 @@ export function buildAgentRegistry(config?: ArcherConfig): AgentSpec[] {
 }
 
 /** Project pipelines shadow built-ins of the same name (including "implement", the default). */
-export function selectPipelineSpec(config: ArcherConfig | undefined, name: string): PipelineSpec {
+export function selectPipelineSpec(config: WoprConfig | undefined, name: string): PipelineSpec {
   const spec = config?.pipelines[name] ?? builtInPipelines[name]
   if (spec) return spec
   const available = [...new Set([...Object.keys(builtInPipelines), ...Object.keys(config?.pipelines ?? {})])].sort()
@@ -580,7 +580,7 @@ export function isValidModelString(value: string): boolean {
 }
 
 /** Serializes a config back to YAML, omitting empty sections, with `version: 1` first. Comments are not preserved. */
-export function serializeArcherConfig(config: ArcherConfig): string {
+export function serializeWoprConfig(config: WoprConfig): string {
   const out: Record<string, unknown> = { version: 1 }
   if (Object.keys(config.defaults).length > 0) out.defaults = config.defaults
   if (Object.keys(config.agents).length > 0) out.agents = config.agents
@@ -612,9 +612,9 @@ function serializeHooks(hooks: HooksConfig): Record<string, unknown> | undefined
 }
 
 /** Serializes, validates by re-parsing, then writes. Never persists YAML that wouldn't load back. */
-export async function writeArcherConfig(path: string, config: ArcherConfig, targetDir: string): Promise<void> {
-  const body = serializeArcherConfig(config)
-  parseArcherConfig(body, path, targetDir)
+export async function writeWoprConfig(path: string, config: WoprConfig, targetDir: string): Promise<void> {
+  const body = serializeWoprConfig(config)
+  parseWoprConfig(body, path, targetDir)
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, body, "utf8")
 }
@@ -625,7 +625,7 @@ export async function writeArcherConfig(path: string, config: ArcherConfig, targ
  * editable. Agent model preferences that differ from defaults.model are inlined
  * on their steps, because defaults.model would otherwise shadow them.
  */
-export function defaultConfigTemplate(): ArcherConfig {
+export function defaultConfigTemplate(): WoprConfig {
   const globalModel = `${defaultGptModel}#${defaultGptVariant}`
   return {
     defaults: { model: globalModel, maxAttempts: 2 },

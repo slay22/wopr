@@ -39,7 +39,7 @@ describe("worktree branch name helpers", () => {
 
   test("fallbackBranchName is deterministic in shape and git-safe", () => {
     const name = fallbackBranchName()
-    expect(name).toMatch(/^archer-\d{8}-[a-z0-9]{4}$/)
+    expect(name).toMatch(/^wopr-\d{8}-[a-z0-9]{4}$/)
     expect(name.length).toBeLessThanOrEqual(40)
   })
 
@@ -47,6 +47,6 @@ describe("worktree branch name helpers", () => {
     expect(slugifyBranch("Add Onboarding Flow")).toBe("add-onboarding-flow")
     expect(slugifyBranch("feature/foo bar")).toBe("feature-foo-bar")
     // Always returns something, even for garbage input.
-    expect(slugifyBranch("!!!")).toMatch(/^archer-[a-z0-9]{6}$/)
+    expect(slugifyBranch("!!!")).toMatch(/^wopr-[a-z0-9]{6}$/)
   })
 })

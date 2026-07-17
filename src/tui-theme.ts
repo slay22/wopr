@@ -88,7 +88,7 @@ const neutralPalette: Palette = {
   chipText: "#000000",
 }
 
-// Module-level on purpose: one TUI exists per archer process, and a mutable
+// Module-level on purpose: one TUI exists per wopr process, and a mutable
 // palette spares threading it through every render helper.
 export let theme: Palette = darkPalette
 

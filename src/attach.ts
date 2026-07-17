@@ -1,6 +1,6 @@
 import { log } from "./log"
 
-// `archer runs` used to attach to a live run's OpenCode server and mirror its
+// `wopr runs` used to attach to a live run's OpenCode server and mirror its
 // event stream into a read-only dashboard. pi runs in-process with no server to
 // attach to, so live-mirroring is dropped for the MVP port.
 // ponytail: rebuild on pi's JSONL session files (SessionManager can tail them)

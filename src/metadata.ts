@@ -35,7 +35,7 @@ export type RunMetadata = {
   updatedAt: number
   /** The resolved pipeline this run executes; resume replays it even if the project config changed since. */
   pipeline?: Pipeline
-  /** The live opencode server for this run while it executes; cleared on shutdown, so a lingering entry means the run process died mid-flight. Lets `archer runs` attach to a running run. */
+  /** The live opencode server for this run while it executes; cleared on shutdown, so a lingering entry means the run process died mid-flight. Lets `wopr runs` attach to a running run. */
   server?: { url: string; pid: number; startedAt: number }
   phases: Record<string, PhaseMetadata>
 }
@@ -44,7 +44,7 @@ export type RunMetadataStore = {
   /** The effective pipeline for this run: the frozen one on resume, the freshly resolved one otherwise. */
   pipeline: Pipeline
   snapshot(name: string): ProgressPhaseSnapshot | undefined
-  /** Records the run's live opencode server URL so `archer runs` can attach; cleared by serverStopped. */
+  /** Records the run's live opencode server URL so `wopr runs` can attach; cleared by serverStopped. */
   serverStarted(url: string): void
   serverStopped(): void
   phaseStarted(name: string): void

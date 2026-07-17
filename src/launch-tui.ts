@@ -2,12 +2,12 @@ import { basename } from "node:path"
 
 import { BoxRenderable, StyledText, TextRenderable, bg, bold, createCliRenderer, decodePasteBytes, fg, stripAnsiSequences, t } from "@opentui/core"
 
-import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig } from "./config"
+import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig } from "./config"
 import { hooksForPipeline } from "./hooks"
 import { builtInPipelines, defaultPipelineName, resolvePipeline } from "./pipeline"
 import { joinLines, padBetween, paletteForTerminal, plain, raw, setTheme, spinnerFrame, terminalBackgroundHex, theme, truncate } from "./tui-theme"
 
-import type { ArcherConfig } from "./config"
+import type { WoprConfig } from "./config"
 import type { BoxOptions, CliRenderer, KeyEvent, PasteEvent, TextChunk } from "@opentui/core"
 import type { AgentSpec, HookSet, HookSpec, Step } from "./types"
 import type { PaletteColor } from "./tui-theme"
@@ -22,7 +22,7 @@ export type LaunchRunSelection = {
   keepRunDir: boolean
   yolo: boolean
   smart: boolean
-  /** When set, Archer ran against an isolated worktree created on launch. */
+  /** When set, WOPR ran against an isolated worktree created on launch. */
   worktree?: { dir: string; branch: string }
 }
 
@@ -112,7 +112,7 @@ const toggles: readonly ToggleSpec[] = [
     key: "keepRunDir",
     label: "Keep run directory",
     flag: "--keep-run-dir / --no-keep-run-dir",
-    description: "Preserve the run workspace under ~/.archer/runs after the run finishes.",
+    description: "Preserve the run workspace under ~/.wopr/runs after the run finishes.",
   },
   {
     key: "tui",
@@ -124,16 +124,16 @@ const toggles: readonly ToggleSpec[] = [
     key: "worktree",
     label: "Isolate in a worktree",
     flag: "--worktree",
-    description: "Create a new branch + git worktree (named from your prompt) and run Archer there, leaving the current branch untouched.",
+    description: "Create a new branch + git worktree (named from your prompt) and run WOPR there, leaving the current branch untouched.",
   },
 ]
 
 export async function launchRunTui(options: { targetDir: string }): Promise<LaunchRunTuiResult> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("archer needs an interactive terminal to open the launcher")
+    throw new Error("wopr needs an interactive terminal to open the launcher")
   }
 
-  const config = await loadMergedArcherConfig(options.targetDir)
+  const config = await loadMergedWoprConfig(options.targetDir)
   const choices = pipelineChoices(config, buildAgentRegistry(config))
   // No "main" fallback: a brand-new repo initialized without a baseRef keeps
   // the user's own init.defaultBranch, and the run auto-detects it afterwards.
@@ -152,7 +152,7 @@ export async function launchRunTui(options: { targetDir: string }): Promise<Laun
   return new LaunchPicker(renderer, options.targetDir, choices, baseRef, config?.defaults.branchNameModel).result
 }
 
-function pipelineChoices(config: ArcherConfig | undefined, agents: readonly AgentSpec[]): PipelineChoice[] {
+function pipelineChoices(config: WoprConfig | undefined, agents: readonly AgentSpec[]): PipelineChoice[] {
   const configured = config?.pipelines ?? {}
   const defaultName = config?.defaults.pipeline ?? defaultPipelineName
   const hooksConfig = config?.hooks ?? emptyHooksConfig()
@@ -322,7 +322,7 @@ class LaunchPicker {
     })
 
     const shell = new BoxRenderable(renderer, {
-      id: "archer-launch-shell",
+      id: "wopr-launch-shell",
       width: "100%",
       height: "100%",
       backgroundColor: theme.bg,
@@ -330,8 +330,8 @@ class LaunchPicker {
       paddingX: 1,
     })
 
-    const header = this.panel({ id: "archer-launch-header", height: 4, borderColor: theme.border, backgroundColor: theme.bg })
-    const body = new BoxRenderable(renderer, { id: "archer-launch-body", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1 })
+    const header = this.panel({ id: "wopr-launch-header", height: 4, borderColor: theme.border, backgroundColor: theme.bg })
+    const body = new BoxRenderable(renderer, { id: "wopr-launch-body", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1 })
 
     const selectFromList = (event: { y: number; preventDefault(): void; stopPropagation(): void }) => {
       event.preventDefault()
@@ -349,7 +349,7 @@ class LaunchPicker {
     }
 
     const pipeline = this.panel({
-      id: "archer-launch-pipelines",
+      id: "wopr-launch-pipelines",
       height: "100%",
       width: this.pipelineWidth(),
       borderColor: theme.borderDim,
@@ -372,7 +372,7 @@ class LaunchPicker {
     }
 
     const detail = this.panel({
-      id: "archer-launch-detail",
+      id: "wopr-launch-detail",
       flexGrow: 1,
       height: "100%",
       borderColor: theme.borderDim,
@@ -382,7 +382,7 @@ class LaunchPicker {
       onMouseDown: selectOption,
     })
     detail.text.onMouseDown = selectOption
-    const footer = this.panel({ id: "archer-launch-footer", height: 3, borderColor: theme.borderDim, backgroundColor: theme.bg })
+    const footer = this.panel({ id: "wopr-launch-footer", height: 3, borderColor: theme.borderDim, backgroundColor: theme.bg })
 
     this.headerText = header.text
     this.pipelineText = pipeline.text
@@ -410,7 +410,7 @@ class LaunchPicker {
     // absolute overlay centers a rounded accent-bordered box painted on
     // theme.overlay so it masks the setup screen underneath.
     this.overlay = new BoxRenderable(renderer, {
-      id: "archer-launch-overlay",
+      id: "wopr-launch-overlay",
       position: "absolute",
       left: 0,
       top: 0,
@@ -422,7 +422,7 @@ class LaunchPicker {
       visible: false,
     })
     this.modalBox = new BoxRenderable(renderer, {
-      id: "archer-launch-modal",
+      id: "wopr-launch-modal",
       border: true,
       borderStyle: "rounded",
       borderColor: theme.accent,
@@ -842,7 +842,7 @@ class LaunchPicker {
     return Math.max(46, Math.min(80, this.renderer.width - 10))
   }
 
-  // No "◆ archer" branding here: the launcher is archer's own front door, so
+  // No "◆ wopr" branding here: the launcher is wopr's own front door, so
   // the target project is the header's anchor and the meter row stays clean.
   private headerContent(width: number) {
     const project = basename(this.targetDir) || this.targetDir
@@ -932,7 +932,7 @@ class LaunchPicker {
     const lines: StyledText[] = []
     lines.push(new StyledText([fg(theme.faint)("pipeline "), bold(fg(theme.text)(choice.name))]))
     lines.push(plain(""))
-    lines.push(t`${fg(theme.dim)("Describe what Archer should do. Paste freely; Shift+Enter adds a line.")}`)
+    lines.push(t`${fg(theme.dim)("Describe what WOPR should do. Paste freely; Shift+Enter adds a line.")}`)
     lines.push(plain(""))
 
     const fieldWidth = Math.max(10, width - 2)

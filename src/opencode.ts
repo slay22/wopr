@@ -3,7 +3,7 @@ import "./polyfills"
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 
-// archer drives the model in-process via pi now (see src/pi.ts), so there is no
+// wopr drives the model in-process via pi now (see src/pi.ts), so there is no
 // OpenCode server/client here anymore. What remains are the macOS helpers that
 // open an interactive `opencode` terminal window for hands-on iteration.
 // ponytail: MVP has no pi server to attach to, so these `opencode attach <url>`
@@ -15,7 +15,7 @@ export type SessionWindowBackend = "ghostty" | "terminal"
 // Async on purpose: this is called from the TUI's render path, and a sync
 // osascript call would freeze the dashboard while macOS opens the window.
 // Prefers Ghostty when installed; Terminal.app is the fallback that always
-// works on macOS. ARCHER_TERMINAL=ghostty|terminal forces a backend.
+// works on macOS. WOPR_TERMINAL=ghostty|terminal forces a backend.
 export async function openOpencodeSessionWindow(input: {
   url: string
   targetDir: string
@@ -50,7 +50,7 @@ export async function openStoredSessionWindow(input: {
 // Opens a standalone opencode TUI on a brand-new session seeded with an
 // initial prompt (--prompt submits it on startup). Standalone on purpose: the
 // run's server dies when the finish screen closes, and this window must
-// outlive archer so the user can keep iterating.
+// outlive wopr so the user can keep iterating.
 export async function openIterateOpencodeWindow(input: {
   targetDir: string
   prompt: string
@@ -68,7 +68,7 @@ async function openSessionCommand(coreCommand: string): Promise<SessionWindowBac
     .filter(Boolean)
     .join("; ")
 
-  const forced = process.env.ARCHER_TERMINAL?.toLowerCase()
+  const forced = process.env.WOPR_TERMINAL?.toLowerCase()
   if (forced === "terminal") {
     await openInTerminalApp(command)
     return "terminal"

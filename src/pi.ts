@@ -17,7 +17,7 @@ import { log } from "./log"
 
 // pi has no server/multi-session process like OpenCode; each phase is an
 // in-process AgentSession. This module owns the shared model registry + auth and
-// the session-construction seam that the rest of archer drives.
+// the session-construction seam that the rest of wopr drives.
 
 export type ModelSelection = { providerID: string; modelID: string; variant?: string }
 
@@ -41,7 +41,7 @@ export function piRuntime() {
 const thinkingLevels = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"])
 
 /**
- * OpenCode's `#variant` maps onto pi's reasoning effort (`thinkingLevel`). Archer's
+ * OpenCode's `#variant` maps onto pi's reasoning effort (`thinkingLevel`). WOPR's
  * variant names (xhigh/high/low/…) are already pi's level names, so it's a direct
  * lookup; an unrecognized variant is warned and ignored (no thinking level applied).
  */
@@ -82,7 +82,7 @@ export async function createPhaseSession(input: PhaseSessionInput): Promise<Agen
   const resourceLoader = new DefaultResourceLoader({
     cwd: input.cwd,
     agentDir,
-    // Archer supplies the whole agent instruction; don't layer pi's own project
+    // WOPR supplies the whole agent instruction; don't layer pi's own project
     // context files, skills, or extensions on top of it.
     noContextFiles: true,
     noSkills: true,

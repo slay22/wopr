@@ -5,7 +5,7 @@ import { addWorktree } from "./git"
 import { log } from "./log"
 import { readOnlyToolNames, runReadOnlyPrompt } from "./pi"
 import { parseModel } from "./runner"
-import { archerHome } from "./workspace"
+import { woprHome } from "./workspace"
 
 export type WorktreeResult = {
   /** Absolute path of the newly created worktree. */
@@ -34,7 +34,7 @@ const maxBranchNameLength = 40
 
 /**
  * Creates a new git branch checked out in a dedicated worktree under
- * `~/.archer/worktrees/<slug>`, so Archer runs against an isolated checkout
+ * `~/.wopr/worktrees/<slug>`, so WOPR runs against an isolated checkout
  * instead of the user's current working tree. The branch name is synthesized
  * from the prompt by a cheap model (Haiku by default), falling back to a
  * timestamped slug when the model is unavailable.
@@ -43,8 +43,8 @@ export async function createIsolatedWorktree(input: WorktreeInput): Promise<Work
   const base = input.baseRef ?? "HEAD"
   const branch = await generateBranchName(input.prompt, input.targetDir, input.model, input.signal)
   const slug = slugifyBranch(branch)
-  const dir = join(archerHome(), "worktrees", slug)
-  await mkdir(join(archerHome(), "worktrees"), { recursive: true })
+  const dir = join(woprHome(), "worktrees", slug)
+  await mkdir(join(woprHome(), "worktrees"), { recursive: true })
   await addWorktree(dir, branch, base, input.targetDir)
   log.info(`created worktree at ${dir} on branch ${branch}`)
   return { dir, branch }
@@ -125,7 +125,7 @@ export function cleanBranchName(raw: string): string {
 export function fallbackBranchName(): string {
   const stamp = new Date()
   const pad = (value: number) => String(value).padStart(2, "0")
-  return `archer-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${randomSlug(4)}`
+  return `wopr-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${randomSlug(4)}`
 }
 
 /** Filesystem-safe directory name for the worktree (mirrors the branch slug). */
@@ -134,7 +134,7 @@ export function slugifyBranch(branch: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-  return slug || `archer-${randomSlug(6)}`
+  return slug || `wopr-${randomSlug(6)}`
 }
 
 function truncate(value: string, max: number): string {

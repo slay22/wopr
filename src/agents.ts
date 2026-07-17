@@ -26,7 +26,7 @@ export function loadAgentPrompt(agentName: string, targetDir = process.cwd()) {
 }
 
 export function projectAgentPromptPath(agentName: string, targetDir: string) {
-  return join(targetDir, ".archer", "agents", `${agentName}.md`)
+  return join(targetDir, ".wopr", "agents", `${agentName}.md`)
 }
 
 function readProjectAgentPrompt(agentName: string, targetDir: string) {
@@ -45,7 +45,7 @@ function readBuiltInPrompt(promptName: string) {
   const prompt = builtInPrompts[promptName]
   if (prompt !== undefined) return prompt
   throw new Error(
-    `no prompt for "${promptName}": add prompts/${promptName}.md to src/built-in-prompts.ts, or create .archer/agents/${promptName}.md in the target repo`,
+    `no prompt for "${promptName}": add prompts/${promptName}.md to src/built-in-prompts.ts, or create .wopr/agents/${promptName}.md in the target repo`,
   )
 }
 

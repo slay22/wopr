@@ -37,7 +37,7 @@ export async function cleanupWorkspace(workspace: Workspace) {
 }
 
 export async function writeSummary(workspace: Workspace, phaseNames: string[]) {
-  const chunks: string[] = [`# archer run ${workspace.runID} - summary`, ""]
+  const chunks: string[] = [`# wopr run ${workspace.runID} - summary`, ""]
 
   for (const name of phaseNames) {
     chunks.push(`## ${name}`, "")
@@ -58,32 +58,32 @@ export function runDir(runID: string) {
 }
 
 export function runsRoot() {
-  return join(archerHome(), "runs")
+  return join(woprHome(), "runs")
 }
 
 /**
- * The directory that contains archer's `.archer` home — the user's home by
- * default, relocatable via ARCHER_HOME. It plays the same role for the global
+ * The directory that contains wopr's `.wopr` home — the user's home by
+ * default, relocatable via WOPR_HOME. It plays the same role for the global
  * config that a repo root plays for a project, so agent-prompt paths resolve
- * the same way (`<root>/.archer/agents/<name>.md`).
+ * the same way (`<root>/.wopr/agents/<name>.md`).
  */
-export function archerRoot() {
-  return process.env.ARCHER_HOME || homedir()
+export function woprRoot() {
+  return process.env.WOPR_HOME || homedir()
 }
 
-/** Archer's per-user home, holding run history and the global config. */
-export function archerHome() {
-  return join(archerRoot(), ".archer")
+/** WOPR's per-user home, holding run history and the global config. */
+export function woprHome() {
+  return join(woprRoot(), ".wopr")
 }
 
 /** Path of the global config file (default name); the loader also accepts config.yml. */
 export function globalConfigPath() {
-  return join(archerHome(), "config.yaml")
+  return join(woprHome(), "config.yaml")
 }
 
-/** Where prompts for global custom agents live, mirroring a project's .archer/agents. */
+/** Where prompts for global custom agents live, mirroring a project's .wopr/agents. */
 export function globalAgentsDir() {
-  return join(archerHome(), "agents")
+  return join(woprHome(), "agents")
 }
 
 export function isValidRunID(runID: string) {

@@ -8,7 +8,7 @@ import { formatEvalForValidator, runEvaluation } from "../src/evaluate"
 
 let dir: string
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "archer-eval-"))
+  dir = await mkdtemp(join(tmpdir(), "wopr-eval-"))
 })
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true })

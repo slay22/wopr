@@ -15,7 +15,7 @@ import type { PermissionAdditions } from "./types"
 // that consults the same bash policy, safety judge, and human prompt inline and
 // returns `{ block }` to allow or deny. Non-bash tools (read/grep/edit/write)
 // are allowed: read-only phases simply aren't given edit/write/bash tools, and
-// archer always auto-allowed edits for writable phases.
+// wopr always auto-allowed edits for writable phases.
 
 export type PermissionGate = {
   /** Pass this into every phase session's `extensions` so the hook fires there. */
@@ -45,7 +45,7 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
   const state = { paused: false, stopped: false }
 
   const extension: InlineExtension = {
-    name: "archer-permissions",
+    name: "wopr-permissions",
     factory: (pi) => {
       pi.on("tool_call", async (event) => {
         if (state.stopped || state.paused) return {}
@@ -55,7 +55,7 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
         // Serialize decisions so concurrent tool calls don't race the terminal
         // prompt or interleave judge output.
         const allowed = await queue(() => decide(command, policy, options, progress, state))
-        return allowed ? {} : { block: true, reason: `archer denied: ${command}` }
+        return allowed ? {} : { block: true, reason: `wopr denied: ${command}` }
       })
     },
   }

@@ -15,7 +15,7 @@ describe("workspace run IDs", () => {
     expect(() => runDir("../20260519-103045-x7q2")).toThrow("invalid run id")
   })
 
-  test("resolves run dirs under the archer runs root", () => {
+  test("resolves run dirs under the wopr runs root", () => {
     const id = "20260519-103045-x7q2"
     const pathFromRoot = relative(runsRoot(), runDir(id))
 

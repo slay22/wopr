@@ -45,7 +45,7 @@ async function git(args: string[], cwd: string) {
 }
 
 async function dirtyRepo(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "archer-recover-repo-"))
+  const dir = await mkdtemp(join(tmpdir(), "wopr-recover-repo-"))
   recoveryDirs.push(dir)
   await git(["init", "-q"], dir)
   await writeFile(join(dir, "keep.txt"), "base\n")
@@ -170,7 +170,7 @@ describe("runner helpers", () => {
     const phase = { name: "design", reportPath: "reports/design.md" } as AgentStep
 
     const workspaceWith = async (report: boolean) => {
-      const dir = await mkdtemp(join(tmpdir(), "archer-resume-"))
+      const dir = await mkdtemp(join(tmpdir(), "wopr-resume-"))
       if (report) {
         await mkdir(join(dir, "reports"), { recursive: true })
         await writeFile(join(dir, "reports", "design.md"), "# stale report")
@@ -362,7 +362,7 @@ describe("dirty-tree recovery", () => {
     ({ snapshot: (name: string) => statuses[name] }) as unknown as RunMetadataStore
 
   async function workspaceWithReports(reports: string[]): Promise<Workspace> {
-    const dir = await mkdtemp(join(tmpdir(), "archer-recover-ws-"))
+    const dir = await mkdtemp(join(tmpdir(), "wopr-recover-ws-"))
     recoveryDirs.push(dir)
     await mkdir(join(dir, "reports"), { recursive: true })
     for (const name of reports) await writeFile(join(dir, "reports", `${name}.md`), `# ${name}`)
@@ -397,9 +397,9 @@ describe("dirty-tree recovery", () => {
 
     await commitRecoveredPhase(ws, metadata, agent("implementer"), repo)
 
-    // working tree is clean and the leftover work is in a new archer commit
+    // working tree is clean and the leftover work is in a new wopr commit
     expect((await git(["status", "--porcelain"], repo)).trim()).toBe("")
-    expect(await git(["log", "-1", "--pretty=%s"], repo)).toContain("archer(implementer):")
+    expect(await git(["log", "-1", "--pretty=%s"], repo)).toContain("wopr(implementer):")
     expect((await git(["show", "--name-only", "--pretty=", "HEAD"], repo)).trim()).toBe("feature.txt")
 
     // a recovery report was written and the phase is marked completed
@@ -415,7 +415,7 @@ describe("dirty-tree recovery", () => {
     await commitRecoveredPhase(ws, metadata, agent("implementer"), repo)
 
     expect(await readFile(join(ws.dir, "reports", "implementer.md"), "utf8")).toBe("# implementer")
-    expect(await git(["log", "-1", "--pretty=%s"], repo)).toContain("archer(implementer): implementer")
+    expect(await git(["log", "-1", "--pretty=%s"], repo)).toContain("wopr(implementer): implementer")
   })
 })
 

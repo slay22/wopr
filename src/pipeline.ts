@@ -237,7 +237,7 @@ export type PipelineSpec = {
   steps: StepSpec[]
 }
 
-/** Suffix reserved for archer's synthesized forced-read-only agent variants; project agents can't use it. */
+/** Suffix reserved for wopr's synthesized forced-read-only agent variants; project agents can't use it. */
 export const readOnlyAgentSuffix = "__ro"
 
 /** The pipeline run when none is selected (no -p flag and no defaults.pipeline). */

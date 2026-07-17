@@ -1,4 +1,4 @@
-BIN := archer
+BIN := wopr
 INSTALL_DIR := $(HOME)/.local/bin
 
 .PHONY: build install uninstall clean test tidy

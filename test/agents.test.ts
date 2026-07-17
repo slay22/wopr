@@ -38,35 +38,35 @@ describe("agent prompts", () => {
   })
 
   test("loads built-in markdown prompts with runtime safety guard rails", () => {
-    const prompt = loadAgentPrompt("implementer", "/tmp/non-existent-archer-target")
+    const prompt = loadAgentPrompt("implementer", "/tmp/non-existent-wopr-target")
 
     expect(prompt).toContain("# Implementer")
-    expect(prompt).toContain("# Archer Runtime Safety")
+    expect(prompt).toContain("# WOPR Runtime Safety")
     expect(prompt).toContain("not replaceable")
   })
 
   test("project agent prompts replace built-ins but keep runtime safety", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "archer-agents-"))
+    const dir = await mkdtemp(join(tmpdir(), "wopr-agents-"))
     try {
-      await mkdir(join(dir, ".archer", "agents"), { recursive: true })
-      await writeFile(join(dir, ".archer", "agents", "implementer.md"), "# Custom Implementer\n\nProject-specific prompt.")
+      await mkdir(join(dir, ".wopr", "agents"), { recursive: true })
+      await writeFile(join(dir, ".wopr", "agents", "implementer.md"), "# Custom Implementer\n\nProject-specific prompt.")
 
       const prompt = loadAgentPrompt("implementer", dir)
 
       expect(prompt.startsWith("# Custom Implementer")).toBe(true)
       expect(prompt).toContain("Project-specific prompt.")
       expect(prompt).not.toContain("# Implementer\n\nYou are the **implementer**")
-      expect(prompt).toContain("# Archer Runtime Safety")
+      expect(prompt).toContain("# WOPR Runtime Safety")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   test("a synthesized forced-read-only agent (__ro suffix) shares the base agent's prompt", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "archer-ro-variant-"))
+    const dir = await mkdtemp(join(tmpdir(), "wopr-ro-variant-"))
     try {
-      await mkdir(join(dir, ".archer", "agents"), { recursive: true })
-      await writeFile(join(dir, ".archer", "agents", "clean-code.md"), "# Clean Code\n\nLook for unnecessary complexity.")
+      await mkdir(join(dir, ".wopr", "agents"), { recursive: true })
+      await writeFile(join(dir, ".wopr", "agents", "clean-code.md"), "# Clean Code\n\nLook for unnecessary complexity.")
 
       const prompt = loadAgentPrompt(basePromptName("clean-code__ro"), dir)
       expect(prompt).toContain("# Clean Code")
@@ -77,6 +77,6 @@ describe("agent prompts", () => {
   })
 
   test("project agents need a prompt file", () => {
-    expect(() => loadAgentPrompt("ghost", "/tmp/non-existent-archer-target")).toThrow(".archer/agents/ghost.md")
+    expect(() => loadAgentPrompt("ghost", "/tmp/non-existent-wopr-target")).toThrow(".wopr/agents/ghost.md")
   })
 })
