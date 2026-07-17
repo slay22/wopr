@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 700" width="1120" role="img" aria-label="WOPR converge-loop dashboard">
+<title>WOPR — converge-loop dashboard</title>
+<style>
+.m { font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace; font-size: 15px; }
+.b { font-weight: bold; }
+.accent { fill: #33FF77; } .green { fill: #4CFF88; } .teal { fill: #2BE0C4; }
+.red { fill: #FF5666; } .yellow { fill: #FFC24B; } .text { fill: #CDEFD6; }
+.dim { fill: #5E8C6E; } .faint { fill: #37543F; }
+</style>
+
+<!-- window -->
+<rect x="0.5" y="0.5" width="1119" height="699" rx="14" fill="#060E0A" stroke="#1F3D2C" stroke-width="1.5"/>
+<!-- title bar -->
+<circle cx="24" cy="20" r="5" fill="#37543F"/><circle cx="42" cy="20" r="5" fill="#2E4636"/><circle cx="60" cy="20" r="5" fill="#25382A"/>
+<text x="560" y="25" text-anchor="middle" class="m dim">◆ WOPR big board</text>
+
+<!-- dir line -->
+<text x="24" y="62" class="m"><tspan class="dim">dir </tspan><tspan class="text">~/Develop/acme-app</tspan><tspan class="faint">  ·  </tspan><tspan class="dim">main</tspan></text>
+
+<!-- header box -->
+<rect x="20.5" y="76.5" width="1079" height="70" rx="8" fill="none" stroke="#1F3D2C" stroke-width="1.5"/>
+<text x="36" y="106" class="m b"><tspan class="accent">◆ wopr</tspan><tspan class="faint">  ·  </tspan><tspan class="yellow">DEFCON 3</tspan></text>
+<text x="1084" y="106" text-anchor="end" class="m"><tspan class="dim">20:14:07</tspan><tspan class="faint">  ·  </tspan><tspan class="text">4:12</tspan><tspan class="faint">  ·  </tspan><tspan class="green">$0.83</tspan><tspan class="faint">  ·  </tspan><tspan class="dim">↑124.5k ↓18.2k tokens</tspan></text>
+<text x="36" y="132" class="m"><tspan class="dim">CONVERGE </tspan><tspan class="text">2/3</tspan><tspan class="faint">  ·  </tspan><tspan class="dim">verdict </tspan><tspan class="red">✗ REJECT</tspan><tspan class="faint">  ·  </tspan><tspan class="yellow">re-planning from feedback</tspan></text>
+
+<!-- overall progress bar -->
+<rect x="20" y="162" width="1080" height="6" rx="3" fill="#15271C"/>
+<rect x="20" y="162" width="640" height="6" rx="3" fill="#33FF77"/>
+
+<!-- left pipeline panel -->
+<rect x="20.5" y="188.5" width="360" height="470" rx="8" fill="none" stroke="#1F3D2C" stroke-width="1.5"/>
+<text x="40" y="216" class="m dim b">PIPELINE</text>
+<line x1="40" y1="228" x2="360" y2="228" stroke="#15271C" stroke-width="1"/>
+
+<text x="40" y="258" class="m"><tspan class="accent b">▸ review</tspan><tspan class="teal" x="250">parallel</tspan></text>
+<text x="40" y="286" class="m"><tspan class="green">  ✓ patterns</tspan><tspan class="dim" x="250">done</tspan></text>
+<text x="40" y="314" class="m"><tspan class="green">  ✓ security</tspan><tspan class="dim" x="250">done</tspan></text>
+<text x="40" y="342" class="m"><tspan class="green">  ✓ design</tspan><tspan class="dim" x="250">done</tspan></text>
+
+<text x="40" y="380" class="m"><tspan class="dim">converge loop</tspan><tspan class="text" x="250">2/3</tspan></text>
+<text x="40" y="408" class="m"><tspan class="green">  ✓ plan</tspan><tspan class="dim" x="250">done</tspan></text>
+<text x="40" y="436" class="m"><tspan class="accent">  ◓ implement</tspan><tspan class="accent" x="250">running</tspan></text>
+<text x="40" y="464" class="m"><tspan class="faint">  ○ validate</tspan><tspan class="faint" x="250">scheduled</tspan></text>
+
+<text x="40" y="626" class="m faint">iteration 2 · plan re-drawn from 6 findings</text>
+
+<!-- right detail / session panel -->
+<rect x="392.5" y="188.5" width="707" height="470" rx="8" fill="none" stroke="#1F3D2C" stroke-width="1.5"/>
+<text x="412" y="216" class="m"><tspan class="text b">implement</tspan><tspan class="accent">   running   </tspan><tspan class="dim">anthropic/claude-opus-4-8</tspan></text>
+<text x="412" y="240" class="m dim">attempt 2  ·  $0.31  ·  ↑48.2k ↓6.1k tokens  ·  5 files</text>
+<line x1="412" y1="256" x2="1080" y2="256" stroke="#15271C" stroke-width="1"/>
+
+<!-- tabs -->
+<text x="412" y="284" class="m"><tspan class="dim">logs</tspan><tspan class="faint">    </tspan><tspan class="accent b">session</tspan><tspan class="faint">    </tspan><tspan class="dim">reports</tspan></text>
+<line x1="452" y1="292" x2="516" y2="292" stroke="#33FF77" stroke-width="1.5"/>
+<line x1="412" y1="304" x2="1080" y2="304" stroke="#15271C" stroke-width="1"/>
+
+<!-- session feed -->
+<text x="412" y="334" class="m"><tspan class="accent">◓ editing</tspan><tspan class="text"> src/auth/session.ts</tspan></text>
+<text x="412" y="360" class="m"><tspan class="teal">⚙ bash</tspan><tspan class="dim">  bun test auth</tspan></text>
+<text x="412" y="386" class="m dim">» reasoning</text>
+<text x="412" y="410" class="m text">  The validate step flagged a missing token-</text>
+<text x="412" y="432" class="m text">  refresh path — the panel's security finding.</text>
+<text x="412" y="454" class="m text">  Re-implementing the retry guard the plan now</text>
+<text x="412" y="476" class="m text">  calls out, then re-running the suite before</text>
+<text x="412" y="498" class="m text">  handing a fresh verdict back to the planner.</text>
+<text x="412" y="528" class="m"><tspan class="green">✓ wrote</tspan><tspan class="text"> src/auth/refresh.ts</tspan></text>
+<text x="412" y="554" class="m"><tspan class="green">✓ patterns · security · design</tspan><tspan class="dim"> panel: 6 findings</tspan></text>
+<text x="412" y="576" class="m dim">  folded into the plan</text>
+<text x="412" y="612" class="m"><tspan class="accent">◓</tspan><tspan class="dim"> provider streaming…</tspan></text>
+
+<!-- footer keys -->
+<text x="24" y="686" class="m faint">↑/↓ navigate  ·  ←/→ tabs  ·  i takeover  ·  shift+tab auto-accept  ·  ctrl+c abort</text>
+</svg>

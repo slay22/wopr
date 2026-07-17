@@ -2,18 +2,21 @@
   <img src="assets/header.svg" alt="wopr" width="820">
 </p>
 
-<p align="center"><em>An orchestration harness for multi-model agent pipelines.</em></p>
+<p align="center"><em>A self-correcting orchestration harness for multi-model agent pipelines.</em></p>
 
 <p align="center">
-  <img src="assets/screenshot.jpeg" alt="wopr running a pipeline with six parallel agents" width="920">
+  <img src="assets/screenshot.svg" alt="the WOPR dashboard mid converge-loop: a NORAD phosphor big board showing the DEFCON meter and the plan/implement/validate iteration" width="960">
 </p>
 
-WOPR takes a PRD and turns it into a structured, reviewable implementation: a **pipeline** of specialized agents — implementer, pattern auditor, security auditor, design polisher, test engineer, adversarial reviewer — each step a fresh agent on the model best suited to its job, leaving one commit per phase. It is built on top of [OpenCode](https://opencode.ai), so every step can run on any model from any provider you are authenticated with, within the same run.
+> The screenshot above is a rendered mockup of the live TUI. To capture a real one, run a pipeline in your terminal and grab the phosphor dashboard.
 
-**Why it exists:** a single agent in a single session produces a first draft, not shippable code. The quality comes from what happens after that first pass — pattern alignment, security auditing, tests, adversarial review — and that follow-through is exactly the part nobody wants to orchestrate by hand. WOPR makes it repeatable: audits fan out in parallel across different models (a GPT and a Claude reviewing the same diff catch different things), findings are triaged adversarially before any fix lands, and named human gates go wherever you want them.
+WOPR takes a PRD and turns it into a structured, reviewable implementation: a **pipeline** of specialized agents — implementer, pattern auditor, security auditor, design polisher, test engineer, adversarial reviewer — each step a fresh agent on the model best suited to its job, leaving one commit per phase. Its headline mode is the **converge loop**: a plan→implement→validate cycle that re-plans on the validator's own findings and keeps going until the work passes, stalls, or hits its iteration cap. Every step runs on any model from any provider you're authenticated with in [pi](https://github.com/earendil-works/pi), within the same run.
+
+**Why it exists:** a single agent in a single session produces a first draft, not shippable code. The quality comes from what happens after that first pass — pattern alignment, security auditing, tests, adversarial review — and, above all, from *closing the loop*: feeding a review's verdict back into a fresh plan instead of stopping at "here's what's wrong." That follow-through is exactly the part nobody wants to orchestrate by hand. WOPR makes it repeatable: a read-only panel reviews the diff in parallel across different models (a GPT and a Claude catch different things), a planner folds those findings into a typed plan, an implementer executes it, a validator emits a PASS/PARTIAL/REJECT verdict, and — if it isn't PASS — the whole thing re-plans and runs again. Named human gates go wherever you want them.
 
 Typical uses:
 
+- **Converge on a hard change.** `wopr -p converge "what needs to land"` runs a parallel panel review, then loops plan→implement→validate, re-planning from the validator's findings until it reaches PASS (or stalls / exhausts its iterations). An optional evaluation gate runs your build/test between iterations so the verdict is grounded in reality, not vibes.
 - **Ship a feature from a PRD.** `wopr --prompt-file prd.md` runs the default `implement` pipeline; what lands has already been pattern-aligned, security-audited, design-polished, tested, and adversarially reviewed — one commit per phase, so you review a story, not a blob.
 - **Harden a branch you already have** — hand-written, or another agent's output. `wopr -p refine "what this branch does"` audits the current diff (scope, bugs, clean code, security), triages the findings adversarially, applies only the accepted fixes, and validates them.
 - **Get a second opinion before merging.** `wopr -p review "pre-merge check"` changes no code: each audit runs in parallel on two different models and everything is synthesized into one prioritized findings report at `reports/report.md`.
@@ -22,11 +25,11 @@ Typical uses:
 
 Use it as a **CLI** or as a **TUI**, interchangeably: every run can be launched with plain flags and prompt files (`--no-tui` gives you plain logs for pipes and CI), or driven entirely from the TUI — `wopr` with no arguments opens the interactive launcher, every run gets a live dashboard, `wopr runs` browses past runs, and `wopr config` edits global and project config in place.
 
-**Pipelines are data, not code.** WOPR ships a family of built-in pipelines (`implement` — the default — plus `implement-lite`, `ultra-implement`, `refine`, `ultra-refine`, and the report-only `review` and `review-lite`; see [Built-in pipelines](#built-in-pipelines)), and a project can define its own — any number of steps, its own agents, its own models, with named human gates anywhere — in `.wopr/config.yaml`.
+**Pipelines are data, not code.** WOPR ships a family of built-in pipelines (`implement` — the default — plus `implement-lite`, `ultra-implement`, `refine`, `ultra-refine`, the self-correcting `converge`, and the report-only `review` and `review-lite`; see [Built-in pipelines](#built-in-pipelines)), and a project can define its own — any number of steps, its own agents, its own models, with named human gates anywhere — in `.wopr/config.yaml`.
 
-Beyond sequencing agents, WOPR owns the operational layer around OpenCode: repo context attachment, runtime guard rails, a live permission gate, commit safety, phase reports, diff tracking, and a TUI that shows cost, tokens, and provider limits while the run is live.
+Beyond sequencing agents, WOPR owns the operational layer: repo context attachment, runtime guard rails, a live permission gate, commit safety, phase reports, diff tracking, and a NORAD-styled TUI that shows cost, tokens, and converge-loop state while the run is live.
 
-WOPR is written in Bun + TypeScript and uses `@opencode-ai/sdk` to control OpenCode. The SDK starts/controls the OpenCode server; WOPR no longer manually calls `opencode run` nor parses stdout.
+WOPR is written in Bun + TypeScript and drives [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) in-process: there is no separate server or subprocess to manage — each pipeline phase is a fresh in-process pi agent session, wired to WOPR's own permission gate, attachments, and model catalog.
 
 ## The default pipeline: `implement`
 
@@ -48,6 +51,32 @@ PRD ──► implementer ──► patterns ──► security ──► design
 | `tests` | `test-engineer` | `openai/gpt-5.6-terra#xhigh` | Automated tests + relevant E2E/integration coverage |
 | `adversarial` | `adversarial-reviewer` | `openrouter/z-ai/glm-5.2` | Final adversarial review before PR creation |
 
+## The converge loop: `converge`
+
+`implement` runs each step once, top to bottom. `converge` instead **closes the loop**: it keeps re-planning from its own review until the work passes.
+
+```
+                ┌──────────────── re-plan from validator findings ───────────────┐
+                │                                                                 │
+panel review ──►│ plan (planner) ──► implement ──► validate (loop-validator) ──► verdict?
+(patterns +     │  typed plan       execute it     PASS / PARTIAL / REJECT        │
+ security +     │                                    │                            │
+ design,        │                        ┌───────────┴───────────┐               │
+ read-only,     │                        ▼                       ▼               │
+ in parallel)   │                      PASS                 PARTIAL / REJECT ─────┘
+                │                     ✓ done            (until maxIterations or a stall)
+```
+
+1. **Panel review** — `patterns`, `security`, and `design` read the current diff in parallel, read-only. Their findings seed the loop.
+2. **Plan** — the `planner` folds the panel's findings (and, on later iterations, the previous validator's feedback) into a **typed plan**: an ordered list of tasks with rationale.
+3. **Implement** — the `implementer` executes that plan, and only that plan.
+4. **Validate** — the `loop-validator` reads the resulting diff and emits a structured verdict — `PASS`, `PARTIAL`, or `REJECT` — with the specific findings behind it.
+5. **Converge or stop** — `PASS` ends the loop. Otherwise the findings become the next iteration's feedback and it re-plans. It stops early if the plan **stalls** (a new iteration produces materially the same plan without the verdict improving) or hits `maxIterations` (default 3).
+
+An optional **evaluation gate** (`evaluation:` on the loop) runs real commands — install, build, test, and/or run — between iterations, stop-on-first-failure, and feeds their output to the validator, so a `PASS` has to survive your actual test suite rather than the model's say-so.
+
+The dashboard surfaces the loop live: a `CONVERGE 2/3 · verdict ✗ REJECT · re-planning from feedback` line under the header, and the [DEFCON meter](#the-tui-dashboard) escalating as verdicts reject or the plan stalls.
+
 ## Built-in pipelines
 
 WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). A project can add or override any of them in `.wopr/config.yaml`.
@@ -59,6 +88,7 @@ WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). 
 | `ultra-implement` | yes | Like `implement`, but the pattern/security/adversarial reviews of the initial diff run in parallel across two models feeding a triage step, and the run ends with an audit-only final review, a fixer that applies only blocking findings, and a final validator. |
 | `refine` | yes | Audit the current diff (scope → bugs → clean-code → security), triage the findings adversarially, apply the accepted fixes, then validate them. |
 | `ultra-refine` | yes | Like `refine`, but every read-only audit is fanned out across two models before triage, fixes, and validation. |
+| `converge` | yes | **Self-correcting.** A parallel read-only panel review (patterns / security / design), then a plan→implement→validate loop that re-plans on the validator's findings until it passes, stalls, or hits `maxIterations` (see [The converge loop](#the-converge-loop-converge)). |
 | `review` | **no — report only** | Scope the diff, run the bug / clean-code(+patterns) / security audits **in parallel across two models each**, then a single step synthesizes everything into one prioritized findings report. Makes no changes; the run's output is `reports/report.md`, which you read to decide whether to follow up with a `refine` run. |
 | `review-lite` | **no — report only** | Same as `review`, but scope and the first audit model swap from Opus / GPT 5.6 Terra xhigh to `openrouter/z-ai/glm-5.2`; the second parallel audit model and the final report stay on Opus 4.8. |
 
@@ -67,24 +97,21 @@ WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). 
 ## Requirements
 
 - Bun 1.0+
-- `opencode` installed and authenticated (`opencode auth login`)
+- [pi](https://github.com/earendil-works/pi) installed and authenticated (`pi login`), with the providers you want to use configured in `~/.pi/agent`
 - `git`
 
 ## Authentication And Providers
 
-WOPR does not store provider credentials. It starts `opencode serve` through the SDK and passes only runtime agent configuration via `OPENCODE_CONFIG_CONTENT`; the server inherits your shell environment and uses the credentials already configured in OpenCode.
-
-Useful commands:
+WOPR does not store provider credentials. It uses pi's own auth and model registry (`~/.pi/agent`): whatever providers you've logged into with pi are what WOPR can address, and it inherits your shell environment. There is no separate WOPR login.
 
 ```bash
-opencode providers list
-opencode providers login --provider openai
-opencode providers login --provider anthropic
-opencode models openai
-opencode models anthropic
+pi login                 # authenticate a provider (OpenAI, Anthropic, OpenRouter, Google, …)
+pi models                # list the models your configured providers expose
 ```
 
-To use different providers, authenticate them in OpenCode and select models as `provider/model`. WOPR's default `implement` pipeline uses `openai/gpt-5.6-terra#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
+Models are addressed as `provider/model` everywhere WOPR takes one (config, `--model`, per-step). A trailing `#variant` maps onto pi's **reasoning effort** (thinking level) — one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — so `openai/gpt-5.6-terra#xhigh` means that model at `xhigh` thinking. Any model pi knows about, from any provider you've authenticated, can be mixed within a single run.
+
+WOPR's default `implement` pipeline uses `openai/gpt-5.6-terra#xhigh` for implementation, pattern, security, and test phases, and `openrouter/z-ai/glm-5.2` for design and adversarial review. Use `--pipeline implement-lite` for the lower-cost variant that swaps the GPT phases to `openrouter/z-ai/glm-5.2`.
 
 ## Installation
 
@@ -126,7 +153,7 @@ wopr --prompt-file prd.md --skip security,design
 # force a different model for all steps
 wopr --prompt-file prd.md --model anthropic/claude-sonnet-4-6
 
-# disable the OpenTUI progress footer
+# disable the TUI dashboard
 wopr --prompt-file prd.md --no-tui
 
 # drop human gates (for pipelines that define them)
@@ -183,15 +210,19 @@ wopr --prompt-file prd.md --base develop
 wopr --prompt-file prd.md --include-dirty --max-attempts 1
 ```
 
-In interactive terminals, WOPR shows a full-screen OpenTUI dashboard headed by a compact run summary (clock, elapsed, cost, tokens). The `pipeline` panel on the left is a tab selector: every step — done, running, or still scheduled — is a row you move through with `↑`/`↓` (or `j`/`k`), or by clicking, with `▸` marking the focused one. Focusing a step drives the whole right side to it: a detail panel (name; whether it's ongoing, done, failed, or scheduled; model; cost; tokens; attempt; files changed) over that step's todo list and a three-tab content panel — switched with `←`/`→`, `Tab`, the number keys `1`/`2`/`3`, or by clicking the tab strip. The tabs are `logs` (the step's color-coded activity feed), `reports` (the markdown report that step wrote, if any, scrollable with `PgUp`/`PgDn` — available live the moment a step finishes, not only at the end), and `session` (a read-only "follow along" view of that step's OpenCode session: its live state — reasoning, running a command, editing, applying a diff — model, attempt, cost, diff summary, and a scrolling transcript of what the model is doing, newest at the bottom). A not-yet-started step reads as `scheduled` with its planned model and zeroed usage, so you can inspect what's coming; focus auto-follows the active step until you navigate, and `Esc` hands it back to auto-follow. The dashboard never paints backgrounds: the canvas is your terminal's own background and panels are delineated by borders alone, derived as subtle elevations of the terminal's reported background color, with dark or light accents picked by its brightness (and a neutral fallback when the terminal doesn't answer); floating modals repaint the reported color exactly to mask the content beneath them. It follows live theme changes. For full interactivity, press `o` (or click the detail panel) to open the focused step's OpenCode session in a new terminal window attached to WOPR's running OpenCode server; clicking a pipeline row only focuses that step — it no longer opens the session. Ghostty is preferred when installed; Terminal.app is the fallback (`WOPR_TERMINAL=ghostty|terminal` forces a backend). Press `Shift+Tab` to cycle auto-accept modes — off, auto-accept, smart (see the permission gate below). Press `Ctrl+C` once to abort the active OpenCode session and shut down WOPR cleanly; press it again to force exit if cleanup hangs. Human gates stay inside the dashboard (`c` continue · `o` open OpenCode · `a` abort); without a TTY dashboard they fall back to plain terminal prompts. Use `--no-tui` to fall back to plain logs.
+### The TUI dashboard
 
-Press `i` on a running step to arm **interactive takeover**: the step's session opens in a new terminal window (like `o`) and, from that moment, the orchestrator stops acting on that step by itself — no retries, no baseline restore, no auto-completion. Stop the agent from the OpenCode window (`esc`) and work in the session manually; whenever the attempt ends (your interruption, an error, or even a clean finish), the dashboard shows an `interactive session` gate and waits: `c` commits whatever the working tree holds as the step's commit and continues the pipeline, `o` reopens the session window, `a` aborts the run leaving the tree untouched. Press `i` again before the attempt ends to disarm and hand the step back to the normal retry logic.
+In interactive terminals, WOPR shows a full-screen dashboard headed by a compact run summary (clock, elapsed, cost, tokens) and a **DEFCON meter** — NORAD readiness that reads `DEFCON 5` on a calm run and escalates toward `1` as phases retry, verdicts reject, the plan stalls, or the run fails. During a converge loop a second header line tracks the cycle live: `CONVERGE 2/3 · verdict ✗ REJECT · re-planning from feedback`.
 
-When the run ends (success or failure), the dashboard doesn't close — it stays on the very same layout, now frozen for browsing. The pipeline is still the tab selector: move with `↑`/`↓` (or `j`/`k`, or click a phase) to inspect any phase's outcome, duration, model, cost, and diff, and switch its `logs`/`reports`/`session` tabs exactly as during the run (`PgUp`/`PgDn` scroll long reports). Press `o` to open the selected phase's OpenCode session in a new terminal window (the server stays alive while the screen is up), and `g` to open lazygit in the target repo as a subshell — `git log --graph --decorate --stat` is the fallback when lazygit isn't installed. Press `q`, `Esc`, or `Ctrl+C` to close; only then does WOPR clean up the run dir and stop its OpenCode server. Failed runs pre-select the failed phase and show its error.
+The `pipeline` panel on the left is a tab selector: every step — done, running, or still scheduled — is a row you move through with `↑`/`↓` (or `j`/`k`), or by clicking, with `▸` marking the focused one, and a running phase spins a rotating radar dish. Concurrent groups (a `parallel:` block or a step fanned out across `models:`) render as an indented sub-tree under a group header. Focusing a step drives the whole right side to it: a detail panel (name; whether it's ongoing, done, failed, or scheduled; model; cost; tokens; attempt; files changed) over that step's todo list and a three-tab content panel — switched with `←`/`→`, `Tab`, the number keys `1`/`2`/`3`, or by clicking the tab strip. The tabs are `logs` (the step's color-coded activity feed), `reports` (the markdown report that step wrote, if any, scrollable with `PgUp`/`PgDn` — available live the moment a step finishes, not only at the end), and `session` (a read-only "follow along" view of the step's pi agent session: its live state — reasoning, running a command, editing, applying a diff — model, attempt, cost, diff summary, and a scrolling transcript of what the model is doing, newest at the bottom). A not-yet-started step reads as `scheduled` with its planned model and zeroed usage, so you can inspect what's coming; focus auto-follows the active step until you navigate, and `Esc` hands it back to auto-follow.
 
-This same dashboard is reachable after the fact from `wopr runs`: pressing `enter` on a run re-opens it without resuming. If the run is still executing (its OpenCode server is up — the browser marks it with a green ● "running"), WOPR **attaches** to it: history is replayed from the run's metadata and the active phase's OpenCode events are mirrored into the dashboard in real time, read-only — `Ctrl+C` detaches without touching the run. If the run has stopped (completed, failed, or interrupted), WOPR **reconstructs** it from metadata + on-disk reports and shows the browsable finish screen, where `[o]` opens a phase's stored session standalone (`opencode <dir> --session <id>`, its own server, read from disk). Either way, closing the dashboard returns you to the run browser. This works because a run records its server URL and pid in `metadata.json` while it executes and clears them on clean shutdown, so a lingering entry that no longer answers marks a run that died mid-flight.
+The dashboard is a NORAD phosphor "big board": green-on-black on dark terminals, an amber fallback on light ones (green-on-light is unreadable), and a muted green neutral when the terminal doesn't report its background. It never paints backgrounds — the canvas is your terminal's own, and panels are delineated by borders alone, derived as subtle elevations of the reported background color; floating modals repaint the reported color exactly to mask the content beneath them, and it follows live theme changes.
 
-Phases run asynchronously: WOPR fires the prompt with OpenCode's async API and detects completion through the event stream (`session.idle` / `session.error`), with a 30-second session-status poll as fallback and automatic event-stream reconnection. No HTTP request stays open for the duration of a phase, so long-running phases are immune to client-side socket timeouts. WOPR also disables OpenCode's total provider request timeout for its default providers and keeps a 10-minute provider stream idle timeout instead.
+Press `Shift+Tab` to cycle auto-accept modes — off, auto-accept, smart (see the [permission gate](#permission-gate) below). Press `Ctrl+C` once to abort the active session and shut down WOPR cleanly; press it again to force exit if cleanup hangs. Human gates stay inside the dashboard (`c` continue · `i` iterate · `a` abort); without a TTY dashboard they fall back to plain terminal prompts. Use `--no-tui` to fall back to plain logs.
+
+When the run ends (success or failure), the dashboard doesn't close — it stays on the same layout, now frozen for browsing. The pipeline is still the tab selector: move with `↑`/`↓` (or `j`/`k`, or click a phase) to inspect any phase's outcome, duration, model, cost, and diff, and switch its `logs`/`reports`/`session` tabs exactly as during the run (`PgUp`/`PgDn` scroll long reports). Press `g` to open lazygit in the target repo as a subshell — `git log --graph --decorate --stat` is the fallback when lazygit isn't installed. Press `q`, `Esc`, or `Ctrl+C` to close; only then does WOPR clean up the run dir. Failed runs pre-select the failed phase and show its error.
+
+This same finish screen is reachable after the fact from `wopr runs`: pressing `enter` on a run **reconstructs** its dashboard from `metadata.json` + on-disk reports and diffs, for browsing exactly as above (runs still executing are marked with a green ● "running"). Closing it returns you to the run browser.
 
 ## Permission gate
 
@@ -219,13 +250,13 @@ The permission gate has three states. In the dashboard, `Shift+Tab` cycles throu
 - **auto-accept** (`--yolo`) — every ask-level request is allowed automatically (replied as "once") and logged to the activity feed. Switching into this state also resolves any prompts already queued.
 - **smart** (`--smart`) — each request is handed to an external AI judge running *outside* the agentic loop (a single stateless prompt with every tool disabled, so it can only classify, never act). Requests it judges safe — read-only, local, reversible, no secrets, no exfiltration — are auto-allowed with the reason logged; anything it flags as risky (or any judge error/timeout) falls back to prompting you, with the flag shown in the modal. It is deliberately fail-closed: uncertainty never auto-approves.
 
-The judge model is `--smart-model <provider/model[#variant]>`, falling back to `defaults.autoAcceptJudgeModel` in config, then the run's model. The hard denylist is enforced by OpenCode itself and is never relaxed: denied commands are rejected before they ever reach the gate, in every state.
+The judge model is `--smart-model <provider/model[#variant]>`, falling back to `defaults.autoAcceptJudgeModel` in config, then the run's model. The hard denylist is enforced by WOPR's bash policy and is never relaxed: denied commands are rejected before they ever reach the gate, in every state.
 
 ## Commit safety
 
 Before each commit WOPR scans the staged files for common secret names (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.p12`, `*.keystore`, ...). If any match, the commit is aborted, the index reset, and WOPR asks you to add them to `.gitignore` (or delete them) before re-running. Combined with `--include-dirty` this is the only line of defense against accidentally publishing a secret your working tree had lying around — review the resulting commits with `git show` before pushing.
 
-During a human step, WOPR waits indefinitely for an explicit action: `c` continues the pipeline (committing any manual changes), `o` opens an OpenCode window attached to the run's server (resuming its latest session, so the iteration keeps the run's context), and `a` aborts the run.
+During a human step, WOPR waits indefinitely for an explicit action: `c` continues the pipeline (committing any manual changes), `i` iterates (hands the step back for another pass with your feedback), and `a` aborts the run.
 
 ## Project configuration (`.wopr/config.yaml`)
 
@@ -336,7 +367,7 @@ Both files are merged before a run, with the project winning: `defaults`, `agent
 
 `wopr config` opens a TUI to view and edit both configs without hand-editing YAML — two tabs, **Global** (`~/.wopr/config.yaml`) and **Project** (the current repo's `.wopr/config.yaml`):
 
-- Pick models from an autocompleting list: it queries OpenCode for the models your enabled providers expose (including reasoning variants like `#xhigh`), falling back to the full [models.dev](https://models.dev) catalog when OpenCode can't answer, and always accepts a free-typed `provider/model[#variant]`.
+- Pick models from an autocompleting list: it reads pi's model registry for the models your configured providers expose (including reasoning variants like `#xhigh`), falling back to the full [models.dev](https://models.dev) catalog when the registry is empty, and always accepts a free-typed `provider/model[#variant]`.
 - Edit `defaults` (model, autoAcceptJudgeModel, branchNameModel, maxAttempts, baseRef, pipeline) and each agent's model/temperature override. Agent `readOnly` is displayed when set; edit it in YAML.
 - Browse pipelines and their steps; add, delete, reorder steps, set a per-step model or max-attempts, and add new pipelines. Permissions, hooks, and attachments are shown read-only (edit those in the YAML).
 - When a tab has no file yet, `initialize` writes a starter config (the built-in `implement` pipeline, expanded and ready to edit).
@@ -385,7 +416,7 @@ When a project override exists, it replaces that agent's built-in prompt complet
 
 `--file` is repeatable and accepts files or directories. Relative paths are resolved against the target repo.
 
-WOPR doesn't paste those contents into the prompt. It sends them to the SDK as `FilePartInput` with `file://` URL, just like OpenCode's `--file`. It does the same internally with `prd.md`, previous reports, and phase diffs.
+WOPR doesn't paste those contents into the prompt. It hands them to the pi agent session as file parts (by `file://` path), not inlined text, and does the same internally with `prd.md`, previous reports, and phase diffs.
 
 ## Anatomy of a Run
 
@@ -437,20 +468,23 @@ wopr/
 │   ├── main.ts          # entrypoint
 │   ├── cli.ts           # flag parsing
 │   ├── runner.ts        # pipeline orchestration
-│   ├── opencode.ts      # startup/control via SDK
+│   ├── pi.ts            # pi runtime: model registry, auth, per-phase agent session
+│   ├── loop.ts          # converge-loop control: plan signature, verdict progress, stall detection
+│   ├── evaluate.ts      # optional evaluation gate: install/build/test/run between iterations
+│   ├── plan-schema.ts   # typed Plan / Verdict parsing for the converge loop
 │   ├── agents.ts        # prompt loading, agent config, bash policy
 │   ├── project-context.ts # automatic .wopr/rules.md, AGENTS.md, CLAUDE.md discovery
 │   ├── permissions.ts   # live permission gate for tool calls that fall outside the allowlist
 │   ├── safety-judge.ts  # external AI judge for smart auto-accept (tool-less, fail-closed)
-│   ├── attachments.ts   # FilePartInput for --file and internal attachments
+│   ├── attachments.ts   # file parts for --file and internal attachments
 │   ├── git.ts           # diff, commit, and pre-commit secret scan
 │   ├── workspace.ts     # run dir, ~/.wopr home (WOPR_HOME), global config/agents paths
 │   ├── runs.ts          # interactive run-history browser (wopr runs)
-│   ├── runs-tui.ts      # OpenTUI run-history browser rendering
+│   ├── runs-tui.ts      # run-history browser rendering
 │   ├── metadata.ts      # per-run metadata.json: frozen pipeline + --resume restore
 │   ├── config.ts        # config loader/validation, global+project merge, YAML writer
 │   ├── config-tui.ts    # interactive config editor (wopr config)
-│   ├── model-catalog.ts # available-model list via OpenCode SDK, models.dev fallback
+│   ├── model-catalog.ts # available-model list via pi's registry, models.dev fallback
 │   └── pipeline.ts      # built-in agents/pipeline and pipeline-spec resolution
 ├── prompts/             # built-in agent prompts and runtime safety guard rails
 ├── test/                # unit tests for CLI/orchestration
