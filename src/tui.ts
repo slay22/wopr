@@ -763,7 +763,9 @@ export class TuiProgress implements ProgressUI {
     this.runID = runID
     this.targetDir = targetDir
     this.runDir = runDir
-    this.addEvent("wopr", "system", `run ${runID} started`)
+    // Boot flourish: a brief WarGames log-on before the run's own events.
+    this.addEvent("wopr", "system", "◆ WOPR online — shall we play a game?")
+    this.addEvent("wopr", "system", `logon ${runID}`)
     this.render()
   }
 

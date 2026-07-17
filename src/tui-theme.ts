@@ -28,64 +28,68 @@ export type Palette = {
 
 export type PaletteColor = Exclude<keyof Palette, "chipText">
 
+// WOPR identity: a NORAD "big board" phosphor terminal. Dark terminals get
+// green-on-black CRT; light terminals fall back to amber (green-on-light is
+// unreadable). Backgrounds stay unpainted — only the accents change.
 const darkPalette: Palette = {
   bg: "transparent",
-  overlay: "#0A0E1A",
-  border: "#26324B",
-  borderDim: "#1B2438",
-  accent: "#7AA2F7",
-  teal: "#73DACA",
-  green: "#9ECE6A",
-  red: "#F7768E",
-  yellow: "#E0AF68",
-  orange: "#FF9E64",
-  magenta: "#BB9AF7",
-  cyan: "#7DCFFF",
-  text: "#C0CAF5",
-  dim: "#565F89",
-  faint: "#3B4261",
-  chipText: "#0A0E1A",
+  overlay: "#03110A",
+  border: "#1F3D2C",
+  borderDim: "#15271C",
+  accent: "#33FF77",
+  teal: "#2BE0C4",
+  green: "#4CFF88",
+  red: "#FF5666",
+  yellow: "#FFC24B",
+  orange: "#FF9E3D",
+  magenta: "#B99CF0",
+  cyan: "#5EEAD4",
+  text: "#CDEFD6",
+  dim: "#5E8C6E",
+  faint: "#37543F",
+  chipText: "#03110A",
 }
 
+// Amber big-board fallback for light terminals.
 const lightPalette: Palette = {
   bg: "transparent",
-  overlay: "#E1E2E7",
-  border: "#A8AECB",
-  borderDim: "#C1C6DD",
-  accent: "#2E7DE9",
-  teal: "#118C74",
-  green: "#587539",
-  red: "#F52A65",
-  yellow: "#8C6C3E",
-  orange: "#B15C00",
-  magenta: "#7847BD",
-  cyan: "#007197",
-  text: "#343B58",
-  dim: "#6172B0",
-  faint: "#9DA3C2",
-  chipText: "#E1E2E7",
+  overlay: "#F3ECDD",
+  border: "#C9B486",
+  borderDim: "#DDD1B4",
+  accent: "#B45309",
+  teal: "#0F766E",
+  green: "#4D7C0F",
+  red: "#C2262E",
+  yellow: "#A16207",
+  orange: "#C2410C",
+  magenta: "#6D28D9",
+  cyan: "#0E7490",
+  text: "#3A2E12",
+  dim: "#7A6A44",
+  faint: "#A99A76",
+  chipText: "#F3ECDD",
 }
 
 // When the terminal never answers the background query there is nothing safe
 // to paint, so even modals stay transparent and mid-brightness colors keep
-// the text readable on dark and light.
+// the text readable on dark and light — a muted phosphor green that survives both.
 const neutralPalette: Palette = {
   bg: "transparent",
   overlay: "transparent",
-  border: "#808080",
-  borderDim: "#6E6E6E",
-  accent: "#4F9CF9",
-  teal: "#27AE9D",
-  green: "#6FAE4F",
-  red: "#E0606C",
-  yellow: "#B59B3A",
+  border: "#4A7358",
+  borderDim: "#3C5C48",
+  accent: "#3FBF6E",
+  teal: "#2BA893",
+  green: "#5BB56A",
+  red: "#D9545F",
+  yellow: "#C79A3A",
   orange: "#CE8633",
-  magenta: "#A985D6",
-  cyan: "#3FA7C4",
-  text: "#9E9E9E",
-  dim: "#7A7A7A",
-  faint: "#616161",
-  chipText: "#000000",
+  magenta: "#9C7EC8",
+  cyan: "#3FA7B8",
+  text: "#9FB8A6",
+  dim: "#6E8A76",
+  faint: "#556B5C",
+  chipText: "#04160C",
 }
 
 // Module-level on purpose: one TUI exists per wopr process, and a mutable
@@ -156,7 +160,8 @@ function mixToward(rgb: Rgb, pole: Rgb, amount: number): string {
 
 export type PhaseStatus = "pending" | "running" | "completed" | "skipped" | "failed"
 
-const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+// A rotating radar dish — the "big board" is scanning while a phase runs.
+const spinnerFrames = ["◐", "◓", "◑", "◒"]
 
 export function spinnerFrame(now: number) {
   return spinnerFrames[Math.floor(now / 100) % spinnerFrames.length]!
