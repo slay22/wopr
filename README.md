@@ -10,7 +10,7 @@
 
 WOPR takes a PRD and turns it into a structured, reviewable implementation: a **pipeline** of specialized agents — implementer, pattern auditor, security auditor, design polisher, test engineer, adversarial reviewer — each step a fresh agent on the model best suited to its job, leaving one commit per phase. Its headline mode is the **converge loop**: a plan→implement→validate cycle that re-plans on the validator's own findings and keeps going until the work passes, stalls, or hits its iteration cap. Every step runs on any model from any provider you're authenticated with in [pi](https://github.com/earendil-works/pi), within the same run.
 
-**Why it exists:** a single agent in a single session produces a first draft, not shippable code. The quality comes from what happens after that first pass — pattern alignment, security auditing, tests, adversarial review — and, above all, from *closing the loop*: feeding a review's verdict back into a fresh plan instead of stopping at "here's what's wrong." That follow-through is exactly the part nobody wants to orchestrate by hand. WOPR makes it repeatable: a read-only panel reviews the diff in parallel across different models (a GPT and a Claude catch different things), a planner folds those findings into a typed plan, an implementer executes it, a validator emits a PASS/PARTIAL/REJECT verdict, and — if it isn't PASS — the whole thing re-plans and runs again. Named human gates go wherever you want them.
+**Why it exists:** a single agent in a single session produces a first draft, not shippable code. The quality comes from what happens after — pattern alignment, security auditing, tests, adversarial review — and above all from *closing the loop*: feeding a review's verdict back into a fresh plan instead of stopping at "here's what's wrong." That follow-through is the part nobody wants to orchestrate by hand; WOPR makes it repeatable. (Different models catch different things, so reviews can run in parallel across a GPT and a Claude in the same run.)
 
 Typical uses:
 
@@ -23,11 +23,7 @@ Typical uses:
 
 Use it as a **CLI** or as a **TUI**, interchangeably: every run can be launched with plain flags and prompt files (`--no-tui` gives you plain logs for pipes and CI), or driven entirely from the TUI — `wopr` with no arguments opens the interactive launcher, every run gets a live dashboard, `wopr runs` browses past runs, and `wopr config` edits global and project config in place.
 
-**Pipelines are data, not code.** WOPR ships a family of built-in pipelines (`implement` — the default — plus `implement-lite`, `ultra-implement`, `refine`, `ultra-refine`, the self-correcting `converge`, and the report-only `review` and `review-lite`; see [Built-in pipelines](#built-in-pipelines)), and a project can define its own — any number of steps, its own agents, its own models, with named human gates anywhere — in `.wopr/config.yaml`.
-
-Beyond sequencing agents, WOPR owns the operational layer: repo context attachment, runtime guard rails, a live permission gate, commit safety, phase reports, diff tracking, and a NORAD-styled TUI that shows cost, tokens, and converge-loop state while the run is live.
-
-WOPR is written in Bun + TypeScript and drives [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) in-process: there is no separate server or subprocess to manage — each pipeline phase is a fresh in-process pi agent session, wired to WOPR's own permission gate, attachments, and model catalog.
+**Pipelines are data, not code.** WOPR ships a family of built-ins (see [Built-in pipelines](#built-in-pipelines)) and a project can define its own in `.wopr/config.yaml` — any number of steps, its own agents and models, named human gates anywhere. Beyond sequencing agents, it owns the operational layer: repo-context attachment, a live permission gate, commit safety, phase reports, diff tracking, and the NORAD-styled TUI. It's written in Bun + TypeScript and drives [pi](https://github.com/earendil-works/pi) in-process — no separate server or subprocess, each phase a fresh pi agent session wired to WOPR's permission gate, attachments, and model catalog.
 
 ## The default pipeline: `implement`
 
@@ -141,7 +137,12 @@ wopr --prompt-file prd.md --file src/features/onboarding --file tests/onboarding
 
 # run a project-defined pipeline (see "Project configuration" below)
 wopr --prompt-file bug.md --pipeline bug-fix
+```
 
+<details>
+<summary>More flags — single step / skip, resume, run history, config, auth, model &amp; diff control</summary>
+
+```bash
 # only one step
 wopr --prompt-file prd.md --only implementer
 
@@ -208,9 +209,14 @@ wopr --prompt-file prd.md --base develop
 wopr --prompt-file prd.md --include-dirty --max-attempts 1
 ```
 
+</details>
+
 ### The TUI dashboard
 
 In interactive terminals, WOPR shows a full-screen dashboard headed by a compact run summary (clock, elapsed, cost, tokens) and a **DEFCON meter** — NORAD readiness that reads `DEFCON 5` on a calm run and escalates toward `1` as phases retry, verdicts reject, the plan stalls, or the run fails. During a converge loop a second header line tracks the cycle live: `CONVERGE 2/3 · verdict ✗ REJECT · re-planning from feedback`.
+
+<details>
+<summary>Panels, tabs, keys, and the frozen finish screen</summary>
 
 The `pipeline` panel on the left is a tab selector: every step — done, running, or still scheduled — is a row you move through with `↑`/`↓` (or `j`/`k`), or by clicking, with `▸` marking the focused one, and a running phase spins a rotating radar dish. Concurrent groups (a `parallel:` block or a step fanned out across `models:`) render as an indented sub-tree under a group header. Focusing a step drives the whole right side to it: a detail panel (name; whether it's ongoing, done, failed, or scheduled; model; cost; tokens; attempt; files changed) over that step's todo list and a three-tab content panel — switched with `←`/`→`, `Tab`, the number keys `1`/`2`/`3`, or by clicking the tab strip. The tabs are `logs` (the step's color-coded activity feed), `reports` (the markdown report that step wrote, if any, scrollable with `PgUp`/`PgDn` — available live the moment a step finishes, not only at the end), and `session` (a read-only "follow along" view of the step's pi agent session: its live state — reasoning, running a command, editing, applying a diff — model, attempt, cost, diff summary, and a scrolling transcript of what the model is doing, newest at the bottom). A not-yet-started step reads as `scheduled` with its planned model and zeroed usage, so you can inspect what's coming; focus auto-follows the active step until you navigate, and `Esc` hands it back to auto-follow.
 
@@ -221,6 +227,8 @@ Press `Shift+Tab` to cycle auto-accept modes — off, auto-accept, smart (see th
 When the run ends (success or failure), the dashboard doesn't close — it stays on the same layout, now frozen for browsing. The pipeline is still the tab selector: move with `↑`/`↓` (or `j`/`k`, or click a phase) to inspect any phase's outcome, duration, model, cost, and diff, and switch its `logs`/`reports`/`session` tabs exactly as during the run (`PgUp`/`PgDn` scroll long reports). Press `g` to open lazygit in the target repo as a subshell — `git log --graph --decorate --stat` is the fallback when lazygit isn't installed. Press `q`, `Esc`, or `Ctrl+C` to close; only then does WOPR clean up the run dir. Failed runs pre-select the failed phase and show its error.
 
 This same finish screen is reachable after the fact from `wopr runs`: pressing `enter` on a run **reconstructs** its dashboard from `metadata.json` + on-disk reports and diffs, for browsing exactly as above (runs still executing are marked with a green ● "running"). Closing it returns you to the run browser.
+
+</details>
 
 ## Permission gate
 
@@ -259,6 +267,9 @@ During a human step, WOPR waits indefinitely for an explicit action: `c` continu
 ## Project configuration (`.wopr/config.yaml`)
 
 A project can reshape wopr entirely from one file. Everything is optional — the file only declares what differs from the defaults. The same schema also lives globally at `~/.wopr/config.yaml` (see [Global configuration](#global-configuration)); the project file is merged on top of it.
+
+<details>
+<summary>Full annotated <code>.wopr/config.yaml</code> example</summary>
 
 ```yaml
 version: 1
@@ -339,6 +350,8 @@ permissions:                       # additive only; a config allow can never und
 attachments:                       # attached to every step, like repeatable --file flags
   - docs/architecture.md
 ```
+
+</details>
 
 The rules:
 
