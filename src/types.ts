@@ -15,6 +15,10 @@ export type RunOptions = {
   targetDir: string
   /** Create the git repo and/or an initial commit before running, so wopr can start in an empty/uninitialized directory (greenfield). */
   initRepo: boolean
+  /** Set when the run executes inside an isolated worktree (--worktree); lets the runner auto-clean it on success. */
+  worktree?: { dir: string; mainRepo: string }
+  /** Keep the isolated worktree after a successful run; false removes its checkout (branch kept). Defaults to true. */
+  keepWorktree: boolean
   includeDirty: boolean
   /** Start with auto-accept enabled: ask-level permissions are allowed without prompting (denylist still applies). */
   yolo: boolean

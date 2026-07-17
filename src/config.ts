@@ -49,6 +49,8 @@ export type WoprDefaults = {
   autoAcceptJudgeModel?: string
   /** Model that names worktree branches; falls back to the built-in cheap default when unset. */
   branchNameModel?: string
+  /** Keep the isolated worktree (--worktree) after a successful run; false auto-removes its checkout, keeping the branch. Defaults to true. */
+  keepWorktree?: boolean
 }
 
 /** A project agent definition, or model/temperature/readOnly overrides for a built-in one. */
@@ -169,6 +171,7 @@ defaults:
   # baseRef: main # optional: when unset, wopr auto-detects (origin default branch, else main/master/develop/trunk, else current branch)
   # pipeline: implement
   # branchNameModel: anthropic/claude-haiku-4-5 # optional: model that names worktree branches
+  # keepWorktree: false # optional: auto-remove a --worktree checkout after a successful run (the branch is kept); defaults to true
 
 # Agents are matched by name with Markdown prompts next to this config:
 #   agents/<name>.md
@@ -342,7 +345,7 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
 
 function validateDefaults(v: Validator, raw: unknown): WoprDefaults {
   const record = v.record(raw, "defaults")
-  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "autoAcceptJudgeModel", "branchNameModel"])
+  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "autoAcceptJudgeModel", "branchNameModel", "keepWorktree"])
 
   const defaults: WoprDefaults = {}
   if (record.model !== undefined) defaults.model = v.model(record.model, "defaults.model")
@@ -351,6 +354,7 @@ function validateDefaults(v: Validator, raw: unknown): WoprDefaults {
   if (record.pipeline !== undefined) defaults.pipeline = v.nonEmptyString(record.pipeline, "defaults.pipeline")
   if (record.autoAcceptJudgeModel !== undefined) defaults.autoAcceptJudgeModel = v.model(record.autoAcceptJudgeModel, "defaults.autoAcceptJudgeModel")
   if (record.branchNameModel !== undefined) defaults.branchNameModel = v.model(record.branchNameModel, "defaults.branchNameModel")
+  if (record.keepWorktree !== undefined) defaults.keepWorktree = v.boolean(record.keepWorktree, "defaults.keepWorktree")
   return defaults
 }
 

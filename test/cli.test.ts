@@ -102,6 +102,14 @@ describe("cli parsing", () => {
     if (yolo.type === "run") expect(yolo.options.yolo).toBe(true)
   })
 
+  test("keepWorktree defaults on; --no-keep-worktree turns it off", async () => {
+    const plain = await parseCommand(["prompt"])
+    if (plain.type === "run") expect(plain.options.keepWorktree).toBe(true)
+
+    const off = await parseCommand(["--no-keep-worktree", "prompt"])
+    if (off.type === "run") expect(off.options.keepWorktree).toBe(false)
+  })
+
   test("smart auto-accept is opt-in and resolves a judge model", async () => {
     const plain = await parseCommand(["prompt"])
     // Unset, the judge model still resolves (falls back to the run's model).
@@ -269,6 +277,17 @@ describe("base ref auto-detection", () => {
 
     const options = await resolveRunOptions(parsed)
     expect(options.baseRef).toBe("squad-x")
+  })
+
+  test("--worktree rejects a repo with no commits", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wopr-cli-wt-empty-"))
+    dirs.push(dir)
+    await git(["init", "-q", "-b", "main"], dir)
+    await expect(parseCommand(["--dir", dir, "--worktree", "prompt"])).rejects.toThrow("at least one commit")
+  })
+
+  test("--worktree can't be combined with --resume", async () => {
+    await expect(parseCommand(["--worktree", "--resume", "20260519-103045-x7q2"])).rejects.toThrow("can't be combined with --resume")
   })
 })
 

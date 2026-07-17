@@ -215,6 +215,31 @@ export async function addWorktree(dir: string, branch: string, baseRef: string, 
   await execFile("git", ["worktree", "add", "-b", branch, "--", dir, baseRef], { cwd })
 }
 
+/**
+ * Resolves the branch and owning main-repo of a linked worktree at `dir`, or
+ * null if `dir` isn't a live git worktree (e.g. its main repo was deleted).
+ */
+export async function worktreeInfo(dir: string): Promise<{ branch: string; mainRepo: string } | null> {
+  const common = await execFile("git", ["-C", dir, "rev-parse", "--git-common-dir"], { cwd: dir, allowFailure: true })
+  if (common.exitCode !== 0) return null
+  // For a linked worktree this points at the MAIN repo's .git; its parent is the repo root.
+  const mainRepo = dirname(resolve(dir, common.stdout.trim()))
+  const branch = await execFile("git", ["-C", dir, "branch", "--show-current"], { cwd: dir, allowFailure: true })
+  return { branch: branch.stdout.trim() || "(detached)", mainRepo }
+}
+
+/**
+ * Removes a linked worktree's checkout. The branch (and its commits) stay in
+ * the main repo. Without `force`, git refuses when the worktree has uncommitted
+ * changes — so callers never silently discard un-committed work.
+ */
+export async function removeWorktree(mainRepo: string, dir: string, force = false) {
+  const args = ["-C", mainRepo, "worktree", "remove"]
+  if (force) args.push("--force")
+  args.push("--", dir)
+  await execFile("git", args, { cwd: mainRepo })
+}
+
 export async function writeDiff(path: string, baseRef: string, cwd: string) {
   let diff = await execFile("git", ["diff", baseRef], { cwd, allowFailure: true })
   if (diff.exitCode !== 0) {

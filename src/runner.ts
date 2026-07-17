@@ -7,7 +7,7 @@ import { SessionManager, type AgentSession, type AgentSessionEvent } from "@eare
 
 import { agentToolNames, basePromptName, loadAgentPrompt } from "./agents"
 import { type Attachment, fileParts, renderAttachments } from "./attachments"
-import { addAllAndCommit, createCleanRepoSnapshot, dirtyFilesPreview, dirtyTreeError, ensureRepoReady, initializeRepoWithInitialCommit, restoreRepoSnapshot, type RepoSnapshot, statusPorcelain, writeDiff } from "./git"
+import { addAllAndCommit, createCleanRepoSnapshot, dirtyFilesPreview, dirtyTreeError, ensureRepoReady, initializeRepoWithInitialCommit, removeWorktree, restoreRepoSnapshot, type RepoSnapshot, statusPorcelain, writeDiff } from "./git"
 import { formatEvalForValidator, runEvaluation } from "./evaluate"
 import { hookPhaseNames, hooksForPipeline, runHooks, type HookStage } from "./hooks"
 import { runHumanReviewGate } from "./human"
@@ -460,6 +460,15 @@ export async function run(options: RunOptions) {
       log.info(`Run dir kept at ${workspace.dir}`)
     } else {
       await cleanupWorkspace(workspace).catch((error) => log.warn(`couldn't clean ${workspace.dir}: ${String(error)}`))
+    }
+
+    // Auto-clean the isolated worktree on success when the user opted out of
+    // keeping it. The branch (and its commits) stay in the main repo; a failed
+    // run always keeps the worktree so the work-in-progress is inspectable.
+    if (options.worktree && !runErr && !options.keepWorktree) {
+      await removeWorktree(options.worktree.mainRepo, options.worktree.dir)
+        .then(() => log.info(`Removed worktree ${options.worktree!.dir} (branch kept)`))
+        .catch((error) => log.warn(`couldn't remove worktree ${options.worktree!.dir}: ${String(error)} (kept)`))
     }
   }
 }

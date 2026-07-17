@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type WoprDefaults } from "./config"
-import { detectBaseRef } from "./git"
+import { detectBaseRef, initializeRepoWithInitialCommit, repoBootstrapStatus } from "./git"
 import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
@@ -39,6 +39,8 @@ export type ParsedArgs = {
   baseDetectionDir?: string
   targetDir: string
   initRepo?: boolean
+  worktree?: boolean
+  keepWorktree?: boolean
   includeDirty?: boolean
   yolo?: boolean
   smart?: boolean
@@ -56,6 +58,7 @@ export type CliCommand =
   | { type: "help"; text: string }
   | { type: "run"; options: RunOptions }
   | { type: "runs"; runID?: string }
+  | { type: "worktrees"; action: "list" | "prune"; force: boolean }
   | { type: "config"; targetDir: string }
   | { type: "init"; options: InitOptions }
 
@@ -72,6 +75,10 @@ export async function parseAndRun(argv: string[]) {
   }
   if (command.type === "runs") {
     await openRunsBrowser(command.runID)
+    return
+  }
+  if (command.type === "worktrees") {
+    await runWorktreesCommand(command.action, command.force)
     return
   }
   if (command.type === "config") {
@@ -124,12 +131,15 @@ async function launchInteractiveRun(targetDir: string) {
     parsed.smart = selection.smart
     if (selection.includeDirty) parsed.maxAttempts = 1
 
+    // The launcher's targetDir (outer param) is the original repo; base
+    // detection and worktree cleanup are both anchored there.
+    const worktree = selection.worktree ? { dir: selection.worktree.dir, mainRepo: targetDir } : undefined
     if (selection.worktree) {
       log.info(`running in isolated worktree (branch: ${selection.worktree.branch})`)
       log.info(`  dir: ${selection.worktree.dir}`)
     }
 
-    await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt })
+    await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt, worktree })
     return
   }
 }
@@ -154,6 +164,26 @@ async function openRunsBrowser(initialRunID?: string): Promise<"resumed" | "exit
       continue
     }
     return "exited"
+  }
+}
+
+async function runWorktreesCommand(action: "list" | "prune", force: boolean) {
+  const { listWorktrees, pruneWorktrees } = await import("./worktrees")
+  if (action === "prune") {
+    const { removed, skipped } = await pruneWorktrees({ force })
+    for (const dir of removed) process.stdout.write(`removed ${dir}\n`)
+    for (const s of skipped) process.stdout.write(`skipped ${s.dir} — ${s.reason.split("\n")[0]}\n`)
+    if (!removed.length && !skipped.length) process.stdout.write("no worktrees to prune\n")
+    if (skipped.length) process.stdout.write("\nskipped worktrees have uncommitted changes; re-run `wopr worktrees prune --force` to remove them (branches are always kept)\n")
+    return
+  }
+  const list = await listWorktrees()
+  if (!list.length) {
+    process.stdout.write("no worktrees\n")
+    return
+  }
+  for (const wt of list) {
+    process.stdout.write(wt.stale ? `${wt.dir}  (stale — main repo gone)\n` : `${wt.branch}\t${wt.dir}\n`)
   }
 }
 
@@ -183,6 +213,16 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
     if (argv.length > 1) throw new Error("usage: wopr config")
     return { type: "config", targetDir: process.cwd() }
   }
+  if (argv[0] === "worktrees") {
+    const rest = argv.slice(1)
+    const badFlag = rest.find((arg) => arg.startsWith("-") && arg !== "--force" && arg !== "-f")
+    if (badFlag) throw new Error(`unknown flag: ${badFlag}`)
+    const positional = rest.filter((arg) => !arg.startsWith("-"))
+    if (positional.length > 1) throw new Error("usage: wopr worktrees [list|prune] [--force]")
+    const action = positional[0] ?? "list"
+    if (action !== "list" && action !== "prune") throw new Error("usage: wopr worktrees [list|prune] [--force]")
+    return { type: "worktrees", action, force: rest.includes("--force") || rest.includes("-f") }
+  }
   if (argv[0] === "init") {
     const parsed = parseInitArgs(argv.slice(1))
     if (parsed.help) return { type: "help", text: initHelp() }
@@ -208,7 +248,30 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
     throw new Error("need a prompt (positional or --prompt-file) or --resume <id>")
   }
 
-  return { type: "run", options: { ...(await resolveRunOptions(parsed)), prompt } }
+  let worktree: { dir: string; mainRepo: string } | undefined
+  if (parsed.worktree) {
+    if (parsed.resumeRunID) throw new Error("--worktree can't be combined with --resume")
+    // Mirror the TUI's worktree flow: create the branch + worktree from the
+    // ORIGINAL repo, then point the run at the worktree while keeping base-ref
+    // detection anchored to the original (its branches aren't checked out in
+    // the worktree). Lazy-import the namer so plain runs don't pull in pi.
+    const original = parsed.targetDir
+    if (parsed.initRepo) await initializeRepoWithInitialCommit(original)
+    if ((await repoBootstrapStatus(original)) !== "ready") {
+      throw new Error("--worktree needs a repo with at least one commit to branch from; create an initial commit first (or pass --init-repo)")
+    }
+    const config = await loadMergedWoprConfig(original)
+    const { createIsolatedWorktree } = await import("./worktree")
+    const wt = await createIsolatedWorktree({ targetDir: original, prompt, model: config?.defaults?.branchNameModel })
+    log.info(`running in isolated worktree (branch: ${wt.branch})`)
+    log.info(`  dir: ${wt.dir}`)
+    parsed.baseDetectionDir = original
+    parsed.targetDir = wt.dir
+    parsed.includeDirty = false // a fresh worktree is always clean
+    worktree = { dir: wt.dir, mainRepo: original }
+  }
+
+  return { type: "run", options: { ...(await resolveRunOptions(parsed)), prompt, worktree } }
 }
 
 type ParsedInitArgs = InitOptions & { help?: boolean }
@@ -310,6 +373,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     baseRef: await resolveBaseRef(parsed, defaults),
     targetDir: parsed.targetDir,
     initRepo: parsed.initRepo ?? false,
+    keepWorktree: parsed.keepWorktree ?? defaults.keepWorktree ?? true,
     includeDirty: parsed.includeDirty ?? false,
     yolo: parsed.yolo ?? false,
     smart: parsed.smart ?? false,
@@ -403,6 +467,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--init-repo":
         parsed.initRepo = true
         break
+      case "--worktree":
+        parsed.worktree = true
+        break
+      case "--keep-worktree":
+        parsed.keepWorktree = true
+        break
+      case "--no-keep-worktree":
+        parsed.keepWorktree = false
+        break
       case "--include-dirty":
         parsed.includeDirty = true
         break
@@ -487,6 +560,8 @@ Commands:
   init --global            Create ~/.wopr/config.yaml and ~/.wopr/agents/*.md
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.wopr/runs)
+  worktrees [list|prune]   List the isolated worktrees --worktree created (under ~/.wopr/worktrees),
+                           or prune their checkouts (branches are kept; --force removes dirty ones)
   config                   View and edit the global (~/.wopr) and current project config in a TUI
 
 Flags:
@@ -504,6 +579,9 @@ Flags:
   --smart                  Smart auto-accept: an AI judge auto-allows safe ask-level requests and escalates risky ones (shift+tab cycles)
   --smart-model <provider/model[#variant]> Model for the smart auto-accept judge (default: defaults.autoAcceptJudgeModel, else the run's model)
   --init-repo              Start from scratch: create the git repo and/or an initial commit first, so wopr can run in an empty/uninitialized directory
+  --worktree               Run in a new branch + git worktree (named from your prompt, under ~/.wopr/worktrees), leaving the current working tree untouched
+  --keep-worktree          Keep the --worktree checkout after a successful run (default; overrides defaults.keepWorktree)
+  --no-keep-worktree       Auto-remove the --worktree checkout after a successful run (the branch is kept)
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
   --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)

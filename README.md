@@ -167,6 +167,13 @@ wopr --prompt-file prd.md --no-tui
 # drop human gates (for pipelines that define them)
 wopr --prompt-file prd.md --no-human-step
 
+# isolate the run: create a new branch + git worktree (named from the prompt,
+# under ~/.wopr/worktrees) and run there, leaving your current tree untouched.
+# The work lands as commits on the new branch; merge it back when you're happy.
+# Worktrees are kept for inspection; add --no-keep-worktree (or defaults.keepWorktree:
+# false) to auto-remove the checkout after a successful run (the branch is kept).
+wopr --prompt-file prd.md --worktree
+
 # resume a failed run (phases that already wrote their report are skipped,
 # and the dashboard restores their real duration, cost, and session).
 # If a phase was interrupted before its commit and left the working tree dirty,
@@ -190,6 +197,12 @@ wopr runs 20260519-103045-x7q2
 # two tabs (Global / Project), pick models with autocomplete, edit pipelines
 # and steps, or initialize a starter config when none exists.
 wopr config
+
+# list the isolated worktrees --worktree created (under ~/.wopr/worktrees),
+# then reclaim disk by pruning their checkouts. Branches are always kept, so
+# committed work is never lost; dirty worktrees are skipped unless --force.
+wopr worktrees
+wopr worktrees prune
 
 # create project-local config and prompt files you can customize
 wopr init
@@ -290,6 +303,7 @@ defaults:
   pipeline: quick                  # pipeline used when -p/--pipeline is not given
   autoAcceptJudgeModel: anthropic/claude-haiku-4-5   # model for smart auto-accept (--smart); defaults to the run's model
   branchNameModel: anthropic/claude-haiku-4-5        # model that names worktree branches (may look up referenced issues)
+  keepWorktree: false              # auto-remove a --worktree checkout after a successful run (branch kept); default true
 
 # Project agents: the prompt lives at .wopr/agents/<name>.md (required).
 # Naming a built-in agent here overrides its model/temperature/readOnly instead.
