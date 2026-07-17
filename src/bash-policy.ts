@@ -271,8 +271,10 @@ export function projectScriptAllowPatterns(targetDir = process.cwd()): string[] 
   return out
 }
 
-export function bashPolicy(targetDir = process.cwd(), additions: PermissionAdditions = noAdditions): Record<string, "allow" | "deny" | "ask"> {
-  const policy: Record<string, "allow" | "deny" | "ask"> = {}
+export type BashDecision = "allow" | "deny" | "ask"
+
+export function bashPolicy(targetDir = process.cwd(), additions: PermissionAdditions = noAdditions): Record<string, BashDecision> {
+  const policy: Record<string, BashDecision> = {}
   // Config additions only ever extend the lists: a project can deny more and
   // allow more, but a config allow can never resurrect a denied pattern.
   const denied = new Set([...denyBashPatterns, ...additions.deny])
@@ -283,6 +285,40 @@ export function bashPolicy(targetDir = process.cwd(), additions: PermissionAddit
   }
   policy["*"] = "ask"
   return policy
+}
+
+// OpenCode matched these glob patterns server-side; on pi we match them
+// ourselves in the tool_call hook. Deny wins over allow; unmatched → "ask".
+// ponytail: prefix/`*` glob only (mirrors OpenCode's wildcard semantics), no
+// brace/char-class support — add if a project pattern ever needs it.
+export function evaluateBashPolicy(command: string, policy: Record<string, BashDecision>): BashDecision {
+  const cmd = command.trim()
+  // Deny is checked against the whole command AND each &&/||/;-separated segment,
+  // so a denied command can't hide behind "safe-thing && git push". Pipes are NOT
+  // split, so pipe-spanning deny patterns like "curl* | sh*" still match the whole.
+  const segments = [cmd, ...cmd.split(/&&|\|\||;/).map((s) => s.trim()).filter(Boolean)]
+  for (const [pattern, decision] of Object.entries(policy)) {
+    if (decision !== "deny") continue
+    const regex = globToRegExp(pattern)
+    if (segments.some((segment) => regex.test(segment))) return "deny"
+  }
+  // Allow requires the whole command to match a single allow pattern; a compound
+  // command that isn't wholly one allowed form falls through to ask.
+  for (const [pattern, decision] of Object.entries(policy)) {
+    if (decision === "allow" && globToRegExp(pattern).test(cmd)) return "allow"
+  }
+  return "ask"
+}
+
+const globCache = new Map<string, RegExp>()
+
+function globToRegExp(pattern: string): RegExp {
+  const cached = globCache.get(pattern)
+  if (cached) return cached
+  const body = pattern.replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "*" ? "[\\s\\S]*" : `\\${ch}`))
+  const regex = new RegExp(`^${body}$`)
+  globCache.set(pattern, regex)
+  return regex
 }
 
 function isFile(path: string) {

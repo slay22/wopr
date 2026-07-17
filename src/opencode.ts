@@ -1,50 +1,14 @@
 import "./polyfills"
 
 import { stat } from "node:fs/promises"
-import { createServer } from "node:net"
 import { homedir } from "node:os"
 
-import { createOpencodeClient, createOpencodeServer } from "@opencode-ai/sdk/v2"
-
-import type { Config, OpencodeClient } from "@opencode-ai/sdk/v2"
-
-export type OpencodeHandle = {
-  client: OpencodeClient
-  url: string
-  close(): void
-}
-
-export async function startOpencode(config: Config, signal?: AbortSignal): Promise<OpencodeHandle> {
-  const port = await freePort()
-  const server = await createOpencodeServer({
-    hostname: "127.0.0.1",
-    port,
-    timeout: 30_000,
-    signal,
-    config,
-  })
-  const client = createOpencodeClient({ baseUrl: server.url, fetch: fetchWithoutIdleTimeout as typeof fetch })
-
-  return {
-    client,
-    url: server.url,
-    close: server.close,
-  }
-}
-
-// A client for an opencode server already running elsewhere (a live run's
-// server), so `archer runs` can attach and mirror its event stream.
-export function connectOpencode(url: string): OpencodeClient {
-  return createOpencodeClient({ baseUrl: url, fetch: fetchWithoutIdleTimeout as typeof fetch })
-}
-
-// Bun kills fetch sockets that stay quiet for 5 minutes by default; the SSE
-// event stream must outlive that during long tool runs. Bun honors the
-// non-standard `timeout: false` since 1.1; on older versions it's ignored,
-// which is why no single request is ever relied on for a whole phase.
-function fetchWithoutIdleTimeout(request: Request) {
-  return fetch(request, { timeout: false } as RequestInit)
-}
+// archer drives the model in-process via pi now (see src/pi.ts), so there is no
+// OpenCode server/client here anymore. What remains are the macOS helpers that
+// open an interactive `opencode` terminal window for hands-on iteration.
+// ponytail: MVP has no pi server to attach to, so these `opencode attach <url>`
+// windows degrade (empty url) — the callers already try/catch. Rework to pi's
+// JSONL session when a "reopen my session" story is needed.
 
 export type SessionWindowBackend = "ghostty" | "terminal"
 
@@ -155,23 +119,6 @@ async function exists(path: string) {
   } catch {
     return false
   }
-}
-
-async function freePort() {
-  return await new Promise<number>((resolve, reject) => {
-    const server = createServer()
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      if (!address || typeof address === "string") {
-        server.close()
-        reject(new Error("couldn't find a free port"))
-        return
-      }
-      const port = address.port
-      server.close(() => resolve(port))
-    })
-  })
 }
 
 function shellQuote(value: string) {

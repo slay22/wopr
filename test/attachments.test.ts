@@ -18,12 +18,12 @@ describe("fileParts", () => {
 
       const parts = await fileParts(["prd.md", "phase.diff", "data.json", "main.ts", "lib"], dir, "error")
 
+      // pi's prompt takes text only; directories (lib) are skipped, not attached.
       expect(parts.map((part) => [part.filename, part.mime])).toEqual([
         ["prd.md", "text/plain"],
         ["phase.diff", "text/plain"],
         ["data.json", "text/plain"],
         ["main.ts", "text/plain"],
-        ["lib", "application/x-directory"],
       ])
     } finally {
       await rm(dir, { recursive: true, force: true })

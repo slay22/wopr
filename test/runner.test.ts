@@ -11,8 +11,8 @@ import {
   waitForInteractiveGate,
   commitRecoveredPhase,
   createGitLock,
-  describeMessageChunk,
-  describeSessionActivity,
+  describePiActivity,
+  describePiChunk,
   isIgnorableRejection,
   newActivityState,
   parseModel,
@@ -112,100 +112,58 @@ describe("runner helpers", () => {
     expect(shouldSkip(variant, { onlySteps: [], skipSteps: ["clean-code"] })).toBe(true)
   })
 
-  test("turns assistant message updates into live cumulative usage", () => {
+  test("translates pi activity events into one-line status signals", () => {
     const state = newActivityState()
 
-    // Creation update carries no usage yet; it must not claim the total.
-    expect(describeSessionActivity(messageUpdated(assistantInfo("msg_1", 0, 0, 0)), state)).toBeUndefined()
+    expect(describePiActivity({ type: "agent_start" } as never, state)).toMatchObject({ kind: "info", message: "prompt submitted" })
+    expect(describePiActivity({ type: "turn_start" } as never, state)).toMatchObject({ kind: "step" })
 
-    const first = describeSessionActivity(messageUpdated(assistantInfo("msg_1", 0.02, 1_000, 200)), state)
-    expect(first).toEqual({
-      type: "usage",
-      usage: {
-        cost: 0.02,
-        tokens: { input: 1_000, output: 200, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1_200 },
-        sessionID: "ses_1",
-        model: "openai/gpt-5.5#xhigh",
-      },
-    })
+    const bashStart = describePiActivity(
+      { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: { command: "bun test" } } as never,
+      state,
+    )
+    expect(bashStart).toMatchObject({ kind: "bash", message: "bash: bun test" })
 
-    // Same totals again: deduplicated so the UI isn't re-rendered for nothing.
-    expect(describeSessionActivity(messageUpdated(assistantInfo("msg_1", 0.02, 1_000, 200)), state)).toBeUndefined()
+    const readStart = describePiActivity(
+      { type: "tool_execution_start", toolCallId: "c", toolName: "read", args: { filePath: "src/x.ts" } } as never,
+      state,
+    )
+    expect(readStart).toMatchObject({ kind: "tool", message: "read: src/x.ts" })
 
-    // A second message accumulates on top of the first.
-    const second = describeSessionActivity(messageUpdated(assistantInfo("msg_2", 0.01, 500, 100)), state)
-    expect(second?.type).toBe("usage")
-    if (second?.type === "usage") {
-      expect(second.usage.cost).toBeCloseTo(0.03)
-      expect(second.usage.tokens?.input).toBe(1_500)
-      expect(second.usage.tokens?.output).toBe(300)
-    }
+    // A failed tool surfaces as an error; a successful one is silent.
+    expect(describePiActivity({ type: "tool_execution_end", toolName: "bash", isError: true } as never, state)).toMatchObject({ kind: "error" })
+    expect(describePiActivity({ type: "tool_execution_end", toolName: "bash", isError: false } as never, state)).toBeUndefined()
 
-    // User messages never carry usage.
-    expect(describeSessionActivity(messageUpdated({ id: "msg_3", role: "user" }), state)).toBeUndefined()
-  })
-
-  test("marks provider heartbeats and streaming deltas as feed-exempt pulses", () => {
-    const state = newActivityState()
-
-    const busy = describeSessionActivity({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } }, state)
-    expect(busy).toMatchObject({ type: "activity", message: "provider busy", pulse: true })
-
-    const streaming = describeSessionActivity({ type: "message.part.delta", properties: { sessionID: "ses_1", field: "text" } }, state)
-    expect(streaming).toMatchObject({ type: "activity", message: "streaming text", pulse: true })
-
-    const tool = describeSessionActivity({ type: "session.next.tool.called", properties: { sessionID: "ses_1", tool: "bash" } }, state)
-    expect(tool).toMatchObject({ type: "activity", message: "bash" })
-    expect((tool as { pulse?: boolean }).pulse).toBeUndefined()
+    // The first text delta fires; text with nothing else to show returns a write signal.
+    const write = describePiActivity({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hello" } } as never, state)
+    expect(write).toMatchObject({ kind: "write" })
   })
 
   test("extracts the verbatim model stream for the session transcript", () => {
-    const props = (properties: Record<string, unknown>) => properties
-
-    // Reasoning and response deltas come through untouched, tagged by channel —
-    // and uncapped, unlike the 220-char pickString the activity path uses.
     const long = "x".repeat(500)
-    expect(describeMessageChunk({ type: "session.next.reasoning.delta", properties: props({ delta: "let me check " }) })).toEqual({
+    // Reasoning and response deltas come through untouched, tagged by channel.
+    expect(describePiChunk({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "let me check " } } as never)).toEqual({
       channel: "reasoning",
       text: "let me check ",
     })
-    expect(describeMessageChunk({ type: "session.next.text.delta", properties: props({ delta: long }) })).toEqual({
+    expect(describePiChunk({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: long } } as never)).toEqual({
       channel: "response",
       text: long,
     })
 
     // Tool calls and shell commands become one-line action markers.
-    expect(describeMessageChunk({ type: "session.next.tool.called", properties: props({ tool: "read", input: { filePath: "src/x.ts" } }) })).toEqual({
+    expect(describePiChunk({ type: "tool_execution_start", toolCallId: "c", toolName: "read", args: { filePath: "src/x.ts" } } as never)).toEqual({
       channel: "tool",
       text: "read: src/x.ts",
     })
-    expect(describeMessageChunk({ type: "session.next.shell.started", properties: props({ command: "bun test" }) })).toEqual({
+    expect(describePiChunk({ type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: { command: "bun test" } } as never)).toEqual({
       channel: "bash",
       text: "bun test",
     })
 
-    // Current opencode streams text through message.part.delta. If no part
-    // metadata has arrived yet, show it as response text rather than leaving
-    // the session tab blank.
-    const state = newActivityState()
-    expect(describeMessageChunk({ type: "message.part.delta", properties: props({ field: "text", partID: "part_1", delta: "hello" }) }, state)).toEqual({
-      channel: "response",
-      text: "hello",
-    })
-
-    // message.part.updated teaches the transcript whether later deltas belong
-    // to reasoning or response content.
-    expect(describeMessageChunk({ type: "message.part.updated", properties: props({ part: { id: "part_2", type: "reasoning" } }) }, state)).toBeUndefined()
-    expect(describeMessageChunk({ type: "message.part.delta", properties: props({ field: "text", partID: "part_2", delta: "thinking" }) }, state)).toEqual({
-      channel: "reasoning",
-      text: "thinking",
-    })
-
-    // Empty deltas and everything else (usage, todos, heartbeats) are not
-    // transcript content.
-    expect(describeMessageChunk({ type: "session.next.text.delta", properties: props({ delta: "" }) })).toBeUndefined()
-    expect(describeMessageChunk({ type: "message.part.delta", properties: props({ field: "metadata", partID: "part_1", delta: "ignored" }) }, state)).toBeUndefined()
-    expect(describeMessageChunk({ type: "session.status", properties: props({ status: { type: "busy" } }) })).toBeUndefined()
+    // Empty deltas and non-transcript events produce nothing.
+    expect(describePiChunk({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "" } } as never)).toBeUndefined()
+    expect(describePiChunk({ type: "agent_start" } as never)).toBeUndefined()
   })
 
   test("restores on resume only when the phase didn't fail", async () => {
@@ -316,16 +274,12 @@ describe("RunShutdown multi-session tracking", () => {
   function fakeSession(phaseName: string, sessionID: string, aborted: string[]): ActiveSession {
     return {
       sessionID,
-      directory: "/tmp/target",
       phaseName,
-      client: {
-        session: {
-          abort: async ({ sessionID }: { sessionID: string; directory: string }) => {
-            aborted.push(sessionID)
-            return { error: undefined }
-          },
+      agentSession: {
+        abort: async () => {
+          aborted.push(sessionID)
         },
-      } as unknown as ActiveSession["client"],
+      } as unknown as ActiveSession["agentSession"],
     }
   }
 
@@ -482,6 +436,7 @@ describe("waitForInteractiveGate", () => {
   function trackedPermissions() {
     const events: string[] = []
     const permissions = {
+      extension: { name: "test-permissions", factory: () => {} },
       stop: async () => {},
       pause: () => void events.push("pause"),
       resume: () => void events.push("resume"),

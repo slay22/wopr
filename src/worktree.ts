@@ -1,11 +1,9 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 
-import type { Config, OpencodeClient } from "@opencode-ai/sdk/v2"
-
 import { addWorktree } from "./git"
 import { log } from "./log"
-import { startOpencode } from "./opencode"
+import { readOnlyToolNames, runReadOnlyPrompt } from "./pi"
 import { parseModel } from "./runner"
 import { archerHome } from "./workspace"
 
@@ -33,28 +31,6 @@ export const defaultBranchNameModel = "anthropic/claude-haiku-4-5"
 // the deterministic fallback still guards the whole thing.
 const branchNameTimeoutMs = 60_000
 const maxBranchNameLength = 40
-
-/**
- * Read-only permission set for the naming session, mirroring the read-only
- * agent shape in agents.ts. MCP tools from the user's opencode setup are left
- * untouched so issue trackers (Linear, GitHub) stay reachable.
- */
-function namerOpencodeConfig(): Config {
-  return {
-    permission: {
-      read: "allow",
-      list: "allow",
-      glob: "allow",
-      grep: "allow",
-      webfetch: "allow",
-      edit: "deny",
-      bash: "deny",
-      task: "deny",
-      question: "deny",
-      websearch: "deny",
-    },
-  }
-}
 
 /**
  * Creates a new git branch checked out in a dedicated worktree under
@@ -89,66 +65,39 @@ export async function generateBranchName(
   const trimmed = prompt.trim()
   if (!trimmed) return fallbackBranchName()
   try {
-    const handle = await startOpencode(namerOpencodeConfig(), AbortSignal.timeout(branchNameTimeoutMs))
-    try {
-      const name = await askForBranchName(handle.client, trimmed, targetDir, model, signal)
-      const cleaned = cleanBranchName(name)
-      return cleaned || fallbackBranchName()
-    } finally {
-      handle.close()
-    }
+    const name = await askForBranchName(trimmed, targetDir, model, signal)
+    const cleaned = cleanBranchName(name)
+    return cleaned || fallbackBranchName()
   } catch (error) {
     log.warn(`worktree: couldn't generate an AI branch name (${error instanceof Error ? error.message : String(error)}); using fallback`)
     return fallbackBranchName()
   }
 }
 
-export async function askForBranchName(
-  client: OpencodeClient,
-  prompt: string,
-  targetDir: string,
-  model: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const session = await client.session.create(
-    { directory: targetDir, title: "archer branch namer" },
-    { signal: signal ?? undefined },
-  )
-  if (session.error || !session.data?.id) throw new Error("couldn't open a naming session")
-  const sessionID = session.data.id
-  try {
-    const response = await client.session.prompt(
-      {
-        sessionID,
-        directory: targetDir,
-        model: parseModel(model),
-        system: branchNameSystemPrompt,
-        tools: { read: true, list: true, glob: true, grep: true, webfetch: true, write: false, edit: false, bash: false, todoread: false, todowrite: false },
-        parts: [{ type: "text", text: `Prompt:\n${truncate(prompt, 1200)}` }],
-      },
-      { signal: signal ?? undefined },
-    )
-    if (response.error || !response.data) throw new Error("branch namer returned no answer")
-    return collectText(response.data.parts)
-  } finally {
-    try {
-      await client.session.delete({ sessionID, directory: targetDir })
-    } catch {
-      // best-effort
-    }
-  }
+export async function askForBranchName(prompt: string, targetDir: string, model: string, signal?: AbortSignal): Promise<string> {
+  return runReadOnlyPrompt({
+    cwd: targetDir,
+    model: parseModel(model),
+    systemPrompt: branchNameSystemPrompt,
+    userText: `Prompt:\n${truncate(prompt, 1200)}`,
+    toolNames: readOnlyToolNames,
+    signal: signal ?? AbortSignal.timeout(branchNameTimeoutMs),
+  })
 }
 
+// ponytail: pi has no webfetch built-in, so the namer can't fetch a referenced
+// issue URL anymore; it names from the prompt text (and repo files via read
+// tools). Restore issue lookup when pi gains a fetch tool.
 const branchNameSystemPrompt = [
   "You name git branches. Read the user's prompt and reply with ONE short, lowercase, kebab-case",
   "branch name that captures what the work does. 2-5 words. No leading 'feature/', no quotes,",
   "no punctuation except hyphens, no explanation, no markdown. Examples:",
   "add-onboarding-flow, fix-login-redirect, refactor-config-tui, dark-mode-toggle.",
   "If the prompt references an issue, ticket, or PR (#123, ABC-123, a URL) instead of describing",
-  "the work, first look it up with the tools available to you (issue-tracker tools, webfetch,",
-  "repo files) and name the branch after what the issue is actually about. If the reference",
-  "can't be resolved, use the issue ID itself as the name (e.g. dev-1339) — never transcribe",
-  "the sentence around it. The last line of your reply must be the branch name alone.",
+  "the work, look for it in the repo files with the tools available to you and name the branch",
+  "after what the issue is actually about. If the reference can't be resolved, use the issue ID",
+  "itself as the name (e.g. dev-1339) — never transcribe the sentence around it. The last line",
+  "of your reply must be the branch name alone.",
 ].join("\n")
 
 /**
@@ -186,14 +135,6 @@ export function slugifyBranch(branch: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
   return slug || `archer-${randomSlug(6)}`
-}
-
-function collectText(parts: ReadonlyArray<{ type: string; text?: string }>): string {
-  return parts
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text as string)
-    .join("\n")
-    .trim()
 }
 
 function truncate(value: string, max: number): string {

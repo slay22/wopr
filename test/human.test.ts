@@ -102,6 +102,7 @@ describe("runHumanReviewGate", () => {
       "http://127.0.0.1:1234",
       progress,
       {
+        extension: { name: "test-permissions", factory: () => {} },
         stop: async () => {},
         pause: () => {
           paused = true
@@ -137,6 +138,7 @@ describe("runHumanReviewGate", () => {
       "http://127.0.0.1:1234",
       progress,
       {
+        extension: { name: "test-permissions", factory: () => {} },
         stop: async () => {},
         pause: () => void events.push("pause"),
         resume: () => void events.push("resume"),

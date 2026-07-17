@@ -3,12 +3,10 @@ import { resolve } from "node:path"
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type ArcherDefaults } from "./config"
 import { detectBaseRef } from "./git"
-import { openRouterKeySources } from "./limits"
 import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
-import { deleteKeychainSecret, keychainAvailable, storeKeychainSecret } from "./secrets"
 import type { Pipeline, RunOptions } from "./types"
 import { isValidRunID } from "./workspace"
 
@@ -59,7 +57,6 @@ export type CliCommand =
   | { type: "runs"; runID?: string }
   | { type: "config"; targetDir: string }
   | { type: "init"; options: InitOptions }
-  | { type: "auth"; provider: "openrouter"; action: "set" | "remove" | "status" }
 
 export async function parseAndRun(argv: string[]) {
   if (argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
@@ -80,10 +77,6 @@ export async function parseAndRun(argv: string[]) {
     await openConfigEditor(command.targetDir)
     return
   }
-  if (command.type === "auth") {
-    await runAuthCommand(command.action)
-    return
-  }
   if (command.type === "init") {
     const result = command.options.global
       ? await writeDefaultGlobalConfig(command.options.force)
@@ -102,36 +95,47 @@ async function launchInteractiveRun(targetDir: string) {
   // Imported lazily so normal CLI invocations don't pull in OpenTUI until they
   // explicitly ask for the zero-argument interactive launcher.
   const { launchRunTui } = await import("./launch-tui")
-  const selection = await launchRunTui({ targetDir })
-  if (!selection) return
-  if ("action" in selection) {
-    if (selection.action === "runs") await openRunsBrowser()
-    else await openConfigEditor(targetDir)
+  // The launcher is home: runs/config are sub-screens you back out of into the
+  // launcher, so quitting them (or finding no runs) returns here rather than
+  // exiting archer. Only launching or resuming a run is terminal.
+  for (;;) {
+    const selection = await launchRunTui({ targetDir })
+    if (!selection) return
+    if ("action" in selection) {
+      if (selection.action === "runs") {
+        if ((await openRunsBrowser()) === "resumed") return
+      } else {
+        await openConfigEditor(targetDir)
+      }
+      continue
+    }
+
+    const parsed = parseArgs([])
+    parsed.targetDir = selection.targetDir
+    parsed.baseDetectionDir = targetDir
+    parsed.prompt = selection.prompt
+    parsed.pipeline = selection.pipeline
+    parsed.humanReview = selection.humanReview
+    parsed.tui = selection.tui
+    parsed.includeDirty = selection.includeDirty
+    parsed.keepRunDir = selection.keepRunDir
+    parsed.yolo = selection.yolo
+    parsed.smart = selection.smart
+    if (selection.includeDirty) parsed.maxAttempts = 1
+
+    if (selection.worktree) {
+      log.info(`running in isolated worktree (branch: ${selection.worktree.branch})`)
+      log.info(`  dir: ${selection.worktree.dir}`)
+    }
+
+    await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt })
     return
   }
-
-  const parsed = parseArgs([])
-  parsed.targetDir = selection.targetDir
-  parsed.baseDetectionDir = targetDir
-  parsed.prompt = selection.prompt
-  parsed.pipeline = selection.pipeline
-  parsed.humanReview = selection.humanReview
-  parsed.tui = selection.tui
-  parsed.includeDirty = selection.includeDirty
-  parsed.keepRunDir = selection.keepRunDir
-  parsed.yolo = selection.yolo
-  parsed.smart = selection.smart
-  if (selection.includeDirty) parsed.maxAttempts = 1
-
-  if (selection.worktree) {
-    log.info(`running in isolated worktree (branch: ${selection.worktree.branch})`)
-    log.info(`  dir: ${selection.worktree.dir}`)
-  }
-
-  await run({ ...(await resolveRunOptions(parsed)), prompt: selection.prompt })
 }
 
-async function openRunsBrowser(initialRunID?: string) {
+// "resumed" means a run was handed off (terminal, like launching one); "exited"
+// means the user backed out (or there were no runs) — the launcher loops on that.
+async function openRunsBrowser(initialRunID?: string): Promise<"resumed" | "exited"> {
   // The browser can open a run's dashboard and come back, so loop until the
   // user resumes (which hands off to a real run) or quits.
   let currentRunID = initialRunID
@@ -139,7 +143,7 @@ async function openRunsBrowser(initialRunID?: string) {
     const resolution = await browseRuns(currentRunID)
     if (resolution.type === "resume") {
       await run(await resumeOptions(resolution.runID, resolution.targetDir))
-      return
+      return "resumed"
     }
     if (resolution.type === "open") {
       // Lazily imported: attaching pulls in the dashboard + opencode client.
@@ -148,7 +152,7 @@ async function openRunsBrowser(initialRunID?: string) {
       currentRunID = resolution.runID
       continue
     }
-    return
+    return "exited"
   }
 }
 
@@ -167,50 +171,7 @@ async function resumeOptions(runID: string, targetDir?: string): Promise<RunOpti
   return { ...(await resolveRunOptions(parsed)), prompt: "" }
 }
 
-/**
- * The management key never touches archer's argv, env, or disk: `security`
- * itself prompts for the value and the status report only says which sources
- * exist, never what they contain.
- */
-async function runAuthCommand(action: "set" | "remove" | "status") {
-  if (action === "status") {
-    const sources = await openRouterKeySources()
-    const lines = [
-      "openrouter key sources (in precedence order):",
-      `  keychain (archer auth openrouter)  ${sources.keychain ? "configured — exact /credits balance" : "not set"}`,
-      `  env OPENROUTER_API_KEY             ${sources.env ? "set" : "not set"}`,
-      `  opencode auth.json                 ${sources.opencode ? "present" : "not found"}`,
-    ]
-    if (!sources.keychain) lines.push("  without a management key the header meter falls back to /key (key limit or monthly spend)")
-    process.stdout.write(`${lines.join("\n")}\n`)
-    return
-  }
-  if (action === "remove") {
-    const removed = await deleteKeychainSecret("openrouter")
-    process.stdout.write(removed ? "removed the openrouter key from the keychain\n" : "no openrouter key in the keychain\n")
-    return
-  }
-  if (!keychainAvailable()) {
-    throw new Error("the keychain is only available on macOS; set OPENROUTER_API_KEY in the environment instead")
-  }
-  process.stdout.write('storing the OpenRouter management key in the macOS Keychain (service "archer"):\n')
-  const stored = await storeKeychainSecret("openrouter")
-  if (!stored) throw new Error("security add-generic-password failed; the key was not stored")
-  process.stdout.write("openrouter key stored — the run header will show the exact credit balance\n")
-}
-
 export async function parseCommand(argv: string[]): Promise<CliCommand> {
-  if (argv[0] === "auth") {
-    const rest = argv.slice(1)
-    if (rest.length === 0 || (rest.length === 1 && rest[0] === "status")) {
-      return { type: "auth", provider: "openrouter", action: "status" }
-    }
-    if (rest[0] === "openrouter") {
-      if (rest.length === 1) return { type: "auth", provider: "openrouter", action: "set" }
-      if (rest.length === 2 && rest[1] === "--remove") return { type: "auth", provider: "openrouter", action: "remove" }
-    }
-    throw new Error("usage: archer auth [status] | archer auth openrouter [--remove]")
-  }
   if (argv[0] === "runs") {
     const rest = argv.slice(1)
     if (rest.length > 1) throw new Error("usage: archer runs [run-id]")
@@ -503,7 +464,7 @@ function listValue(value: string) {
 function help() {
   return `archer [prompt]
 
-Sequential OpenCode agent pipeline for implementing features.
+Sequential coding-agent pipeline for implementing features.
 
 Usage:
   archer
@@ -513,7 +474,6 @@ Usage:
   archer init
   archer runs [run-id]
   archer config
-  archer auth openrouter
 
 Commands:
   archer                   Open an interactive TUI launcher to pick a pipeline,
@@ -523,8 +483,6 @@ Commands:
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.archer/runs)
   config                   View and edit the global (~/.archer) and current project config in a TUI
-  auth openrouter          Store an OpenRouter management key in the macOS Keychain for the
-                           header credits meter (--remove deletes it; "auth status" lists sources)
 
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file

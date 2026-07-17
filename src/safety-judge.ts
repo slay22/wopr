@@ -1,6 +1,5 @@
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-
 import { log } from "./log"
+import { type ModelSelection, runReadOnlyPrompt } from "./pi"
 
 /** An external classifier's call on whether a permission request is safe to auto-approve. */
 export type SafetyVerdict = { safe: boolean; reason: string }
@@ -15,8 +14,7 @@ export type JudgeRequest = {
 
 export type JudgeInput = {
   request: JudgeRequest
-  /** The prompt body accepts providerID/modelID only — no variant. */
-  model: { providerID: string; modelID: string }
+  model: ModelSelection
   directory: string
   signal?: AbortSignal
   /** Override for the per-request budget; defaults to 20s. */
@@ -50,7 +48,7 @@ const judgeSystemPrompt = [
   '{"safe": boolean, "reason": "<short explanation, <=140 chars>"}',
 ].join("\n")
 
-export async function judgeCommand(client: OpencodeClient, input: JudgeInput): Promise<SafetyVerdict> {
+export async function judgeCommand(input: JudgeInput): Promise<SafetyVerdict> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(new Error("safety judge timed out")), input.timeoutMs ?? defaultTimeoutMs)
   const onParentAbort = () => controller.abort(input.signal?.reason)
@@ -59,30 +57,16 @@ export async function judgeCommand(client: OpencodeClient, input: JudgeInput): P
     else input.signal.addEventListener("abort", onParentAbort, { once: true })
   }
 
-  let sessionID: string | undefined
   try {
-    const session = await client.session.create(
-      { directory: input.directory, title: "archer safety judge" },
-      { signal: controller.signal },
-    )
-    if (session.error || !session.data?.id) throw new Error("safety judge couldn't open a session")
-    sessionID = session.data.id
-
-    const response = await client.session.prompt(
-      {
-        sessionID,
-        directory: input.directory,
-        model: input.model,
-        system: judgeSystemPrompt,
-        // Every tool off: the judge classifies, it never executes.
-        tools: { read: false, write: false, edit: false, bash: false, webfetch: false, todoread: false, todowrite: false },
-        parts: [{ type: "text", text: renderRequest(input.request) }],
-      },
-      { signal: controller.signal },
-    )
-    if (response.error || !response.data) throw new Error("safety judge returned no answer")
-
-    const text = collectText(response.data.parts)
+    // No tools: the judge classifies, it never acts. Throwaway in-memory session.
+    const text = await runReadOnlyPrompt({
+      cwd: input.directory,
+      model: input.model,
+      systemPrompt: judgeSystemPrompt,
+      userText: renderRequest(input.request),
+      signal: controller.signal,
+      toolNames: [],
+    })
     const verdict = parseVerdict(text)
     if (!verdict) {
       log.warn(`[safety-judge] unparseable verdict, escalating: ${truncate(text, 160)}`)
@@ -96,14 +80,6 @@ export async function judgeCommand(client: OpencodeClient, input: JudgeInput): P
   } finally {
     clearTimeout(timeout)
     input.signal?.removeEventListener("abort", onParentAbort)
-    // Throwaway session; the run workspace is ephemeral, so deletion is best-effort.
-    if (sessionID) {
-      try {
-        await client.session.delete({ sessionID, directory: input.directory })
-      } catch {
-        // ignore
-      }
-    }
   }
 }
 
@@ -115,14 +91,6 @@ function renderRequest(request: JudgeRequest): string {
   if (request.description) lines.push(`description: ${request.description}`)
   lines.push("", "Is it safe to auto-approve this without human review?")
   return lines.join("\n")
-}
-
-function collectText(parts: ReadonlyArray<{ type: string; text?: string }>): string {
-  return parts
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text as string)
-    .join("\n")
-    .trim()
 }
 
 /**

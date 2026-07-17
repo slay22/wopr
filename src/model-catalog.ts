@@ -1,7 +1,7 @@
-import type { ModelV2Info, ProviderV2Info } from "@opencode-ai/sdk/v2"
+import type { Model } from "@earendil-works/pi-ai/compat"
 
 import { log } from "./log"
-import { startOpencode } from "./opencode"
+import { piRuntime } from "./pi"
 
 /** A selectable model for the config TUI's picker. `value` is what gets written to config. */
 export type ModelChoice = {
@@ -22,17 +22,16 @@ const modelsDevUrl = "https://models.dev/api.json"
 let cached: ModelChoice[] | undefined
 
 /**
- * The models offered in the picker: first the OpenCode SDK (filtered to the
- * user's enabled providers, with variants expanded), falling back to the full
- * models.dev catalog when the SDK can't answer (no auth / offline). Returns []
- * if both fail, since the picker always also accepts free-typed text. Cached
- * per process once a non-empty list is obtained.
+ * The models offered in the picker: pi's model registry first (built-in +
+ * models.json), falling back to the full models.dev catalog when the registry
+ * is empty. Returns [] if both fail, since the picker always also accepts
+ * free-typed text. Cached per process once a non-empty list is obtained.
  */
-export async function listModels(targetDir: string): Promise<ModelChoice[]> {
+export async function listModels(_targetDir: string): Promise<ModelChoice[]> {
   if (cached) return cached
 
-  const fromSdk = await safe(() => listModelsFromSdk(targetDir), "opencode SDK")
-  if (fromSdk && fromSdk.length > 0) return (cached = fromSdk)
+  const fromRegistry = await safe(() => Promise.resolve(listModelsFromRegistry()), "pi model registry")
+  if (fromRegistry && fromRegistry.length > 0) return (cached = fromRegistry)
 
   const fromDev = await safe(() => fetchModelsDev(), "models.dev")
   if (fromDev && fromDev.length > 0) return (cached = fromDev)
@@ -40,53 +39,21 @@ export async function listModels(targetDir: string): Promise<ModelChoice[]> {
   return []
 }
 
-async function listModelsFromSdk(targetDir: string): Promise<ModelChoice[]> {
-  const handle = await startOpencode({}, AbortSignal.timeout(catalogTimeoutMs))
-  try {
-    const [providers, models] = await Promise.all([
-      handle.client.v2.provider.list({ location: { directory: targetDir } }),
-      handle.client.v2.model.list({ location: { directory: targetDir } }),
-    ])
-    if (providers.error || models.error) throw new Error("opencode returned an error listing providers/models")
-    return toModelChoices(providers.data ?? [], models.data ?? [])
-  } finally {
-    handle.close()
-  }
+function listModelsFromRegistry(): ModelChoice[] {
+  // pi has no model "variants"; each model maps to a single choice.
+  return toModelChoices(piRuntime().modelRegistry.getAll())
 }
 
-/**
- * Pure transform from the SDK's provider/model lists to picker choices. Keeps
- * only models whose provider is enabled, preserves the SDK's release-date order,
- * and expands each model into its base entry plus one per variant.
- */
-export function toModelChoices(providers: readonly ProviderV2Info[], models: readonly ModelV2Info[]): ModelChoice[] {
-  const enabled = new Set(providers.filter((provider) => provider.enabled !== false).map((provider) => provider.id))
+/** Pure transform from pi's model list to picker choices. */
+export function toModelChoices(models: readonly Model<any>[]): ModelChoice[] {
   const choices: ModelChoice[] = []
   const seen = new Set<string>()
-
-  const push = (choice: ModelChoice) => {
-    if (seen.has(choice.value)) return
-    seen.add(choice.value)
-    choices.push(choice)
-  }
-
   for (const model of models) {
-    // When provider info is present, keep only enabled providers; otherwise keep all.
-    if (enabled.size > 0 && !enabled.has(model.providerID)) continue
-    const base = `${model.providerID}/${model.id}`
-    const status = model.status && model.status !== "active" ? model.status : undefined
-    const contextK = model.limit?.context ? Math.round(model.limit.context / 1000) : undefined
-
-    push({ value: base, label: model.name, providerID: model.providerID, ...(status ? { status } : {}), ...(contextK ? { contextK } : {}) })
-    for (const variant of model.variants ?? []) {
-      push({
-        value: `${base}#${variant.id}`,
-        label: `${model.name} (${variant.id})`,
-        providerID: model.providerID,
-        ...(status ? { status } : {}),
-        ...(contextK ? { contextK } : {}),
-      })
-    }
+    const value = `${model.provider}/${model.id}`
+    if (seen.has(value)) continue
+    seen.add(value)
+    const contextK = model.contextWindow ? Math.round(model.contextWindow / 1000) : undefined
+    choices.push({ value, label: model.name, providerID: model.provider, ...(contextK ? { contextK } : {}) })
   }
   return choices
 }

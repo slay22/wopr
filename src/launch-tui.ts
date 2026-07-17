@@ -4,13 +4,11 @@ import { BoxRenderable, StyledText, TextRenderable, bg, bold, createCliRenderer,
 
 import { buildAgentRegistry, emptyHooksConfig, loadMergedArcherConfig } from "./config"
 import { hooksForPipeline } from "./hooks"
-import { startLimitsPoller } from "./limits"
 import { builtInPipelines, defaultPipelineName, resolvePipeline } from "./pipeline"
-import { joinLines, limitsRow, padBetween, paletteForTerminal, plain, raw, setTheme, spinnerFrame, terminalBackgroundHex, theme, truncate } from "./tui-theme"
+import { joinLines, padBetween, paletteForTerminal, plain, raw, setTheme, spinnerFrame, terminalBackgroundHex, theme, truncate } from "./tui-theme"
 
 import type { ArcherConfig } from "./config"
 import type { BoxOptions, CliRenderer, KeyEvent, PasteEvent, TextChunk } from "@opentui/core"
-import type { LimitsSnapshot } from "./limits"
 import type { AgentSpec, HookSet, HookSpec, Step } from "./types"
 import type { PaletteColor } from "./tui-theme"
 
@@ -237,8 +235,6 @@ class LaunchPicker {
   }
 
   private readonly ticker: ReturnType<typeof setInterval>
-  private readonly stopLimits: () => void
-  private limits?: LimitsSnapshot
   private readonly headerText: TextRenderable
   private readonly pipelineText: TextRenderable
   private readonly pipelineBox: BoxRenderable
@@ -446,9 +442,6 @@ class LaunchPicker {
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
-    this.stopLimits = startLimitsPoller((snapshot) => {
-      this.limits = snapshot
-    })
     this.render()
   }
 
@@ -768,7 +761,6 @@ class LaunchPicker {
 
   private finish(selection: LaunchRunTuiResult) {
     clearInterval(this.ticker)
-    this.stopLimits()
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.keyInput.off("paste", this.handlePaste)
     this.renderer.off("theme_mode", this.handleThemeMode)
@@ -861,8 +853,7 @@ class LaunchPicker {
       const active = (this.mode === "pipelines" && index === 0) || (this.mode === "prompt" && index === 1) || (this.mode === "options" && index === 2)
       stage.push(active ? bold(fg(theme.accent)(step)) : fg(theme.dim)(step))
     }
-    const line1 = padBetween(title, stage, width)
-    return joinLines([line1, limitsRow(this.limits, Date.now(), width)])
+    return padBetween(title, stage, width)
   }
 
   private pipelineContent(width: number) {

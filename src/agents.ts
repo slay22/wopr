@@ -1,37 +1,21 @@
 import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 
-import type { AgentConfig, Config } from "@opencode-ai/sdk/v2"
-import { bashPolicy, noAdditions } from "./bash-policy"
 import { builtInPrompts } from "./built-in-prompts"
-import { builtInAgents, readOnlyAgentSuffix } from "./pipeline"
-import type { AgentSpec, PermissionAdditions } from "./types"
+import { readOnlyToolNames, writableToolNames } from "./pi"
+import { readOnlyAgentSuffix } from "./pipeline"
 import { globalAgentsDir } from "./workspace"
 
 const runtimeSafetyPrompt = "runtime-safety"
 
-export function opencodeConfig(
-  runDir: string,
-  targetDir = process.cwd(),
-  agents: readonly AgentSpec[] = builtInAgents,
-  permissions: PermissionAdditions = noAdditions,
-): Config {
-  const agent: Record<string, AgentConfig> = {}
-  for (const spec of agents) {
-    // Synthesized forced-read-only variants (name suffixed "__ro", see
-    // synthesizeReadOnlyAgents in pipeline.ts) have no prompt file of their
-    // own; they share the base agent's prompt under its real name.
-    const promptName = spec.name.endsWith(readOnlyAgentSuffix) ? spec.name.slice(0, -readOnlyAgentSuffix.length) : spec.name
-    agent[spec.name] = agentConfig(spec.description, spec.temperature, spec.readOnly, loadAgentPrompt(promptName, targetDir), runDir, targetDir, false, permissions)
-  }
+/** pi built-in tools a phase gets, gated by whether the agent is read-only. */
+export function agentToolNames(readOnly?: boolean): string[] {
+  return readOnly ? readOnlyToolNames : writableToolNames
+}
 
-  return {
-    agent,
-    provider: providerTimeouts(),
-    permission: {
-      question: "deny",
-    },
-  }
+/** Strip the synthesized "__ro" suffix so read-only variants share the base prompt. */
+export function basePromptName(agentName: string): string {
+  return agentName.endsWith(readOnlyAgentSuffix) ? agentName.slice(0, -readOnlyAgentSuffix.length) : agentName
 }
 
 export function loadAgentPrompt(agentName: string, targetDir = process.cwd()) {
@@ -60,10 +44,9 @@ function readGlobalAgentPrompt(agentName: string) {
 function readBuiltInPrompt(promptName: string) {
   const prompt = builtInPrompts[promptName]
   if (prompt !== undefined) return prompt
-  if (builtInAgents.some((agent) => agent.name === promptName) || promptName === runtimeSafetyPrompt) {
-    throw new Error(`missing built-in prompt: add prompts/${promptName}.md to src/built-in-prompts.ts`)
-  }
-  throw new Error(`agent "${promptName}" has no prompt; create .archer/agents/${promptName}.md in the target repo`)
+  throw new Error(
+    `no prompt for "${promptName}": add prompts/${promptName}.md to src/built-in-prompts.ts, or create .archer/agents/${promptName}.md in the target repo`,
+  )
 }
 
 function isFile(path: string) {
@@ -71,91 +54,5 @@ function isFile(path: string) {
     return statSync(path).isFile()
   } catch {
     return false
-  }
-}
-
-const providerIdleTimeoutMs = 10 * 60 * 1000
-
-function providerTimeouts(): Config["provider"] {
-  const options = {
-    timeout: false as const,
-    chunkTimeout: providerIdleTimeoutMs,
-  }
-
-  return {
-    anthropic: { options },
-    openai: { options },
-    openrouter: { options },
-  }
-}
-
-function agentConfig(
-  description: string,
-  temperature: number | undefined,
-  readOnly: boolean | undefined,
-  prompt: string,
-  runDir: string,
-  targetDir: string,
-  webfetch: boolean,
-  permissions: PermissionAdditions,
-): AgentConfig {
-  if (readOnly) {
-    return {
-      description,
-      mode: "primary",
-      ...(temperature === undefined ? {} : { temperature }),
-      tools: {
-        read: true,
-        list: true,
-        glob: true,
-        grep: true,
-        write: false,
-        edit: false,
-        bash: false,
-        task: false,
-        webfetch,
-        websearch: false,
-      },
-      permission: {
-        read: "allow",
-        list: "allow",
-        glob: "allow",
-        grep: "allow",
-        edit: "deny",
-        bash: "deny",
-        task: "deny",
-        question: "deny",
-        webfetch: webfetch ? "allow" : "deny",
-        websearch: "deny",
-        external_directory: {
-          "*": "deny",
-          [join(runDir, "**")]: "allow",
-        },
-      },
-      prompt,
-    }
-  }
-
-  return {
-    description,
-    mode: "primary",
-    ...(temperature === undefined ? {} : { temperature }),
-    tools: {
-      read: true,
-      write: true,
-      edit: true,
-      bash: true,
-      webfetch,
-    },
-    permission: {
-      edit: "allow",
-      question: "deny",
-      bash: bashPolicy(targetDir, permissions),
-      external_directory: {
-        "*": "deny",
-        [join(runDir, "**")]: "allow",
-      },
-    },
-    prompt,
   }
 }

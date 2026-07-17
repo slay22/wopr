@@ -1,13 +1,23 @@
-import { stat } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { basename, extname, isAbsolute, resolve } from "node:path"
-import { pathToFileURL } from "node:url"
 
-import type { FilePartInput } from "@opencode-ai/sdk/v2"
+import { log } from "./log"
 
 type MissingMode = "skip" | "error"
 
-export async function fileParts(paths: string[], baseDir: string, missing: MissingMode): Promise<FilePartInput[]> {
-  const out: FilePartInput[] = []
+// OpenCode accepted rich file "parts" in a prompt; pi's prompt() takes text (and
+// images). archer's attachments are its own reports, pre-diffs, and project
+// context files — all text — so we inline their content into the prompt.
+// ponytail: text only; binary/image attachments are skipped with a warning.
+// Add pi ImageContent handling if image attachments become a real need.
+export type Attachment = {
+  filename: string
+  mime: string
+  text: string
+}
+
+export async function fileParts(paths: string[], baseDir: string, missing: MissingMode): Promise<Attachment[]> {
+  const out: Attachment[] = []
   for (const input of paths) {
     const path = isAbsolute(input) ? input : resolve(baseDir, input)
     let info
@@ -17,15 +27,26 @@ export async function fileParts(paths: string[], baseDir: string, missing: Missi
       if (missing === "error") throw new Error(`file not found for --file: ${input}`)
       continue
     }
-
-    out.push({
-      type: "file",
-      url: pathToFileURL(path).href,
-      filename: basename(path),
-      mime: info.isDirectory() ? "application/x-directory" : guessMime(path),
-    })
+    if (info.isDirectory()) {
+      log.warn(`attachment skipped (directory, unsupported on pi): ${input}`)
+      continue
+    }
+    const mime = guessMime(path)
+    if (!isTextAttachment(path, mime)) {
+      log.warn(`attachment skipped (non-text, unsupported on pi): ${input}`)
+      continue
+    }
+    out.push({ filename: basename(path), mime, text: await readFile(path, "utf8") })
   }
   return out
+}
+
+/** Render attachments as labeled fenced blocks to append after the prompt text. */
+export function renderAttachments(attachments: readonly Attachment[]): string {
+  if (attachments.length === 0) return ""
+  return attachments
+    .map((file) => `\n\n=== attached file: ${file.filename} ===\n${file.text}`)
+    .join("")
 }
 
 function guessMime(path: string) {

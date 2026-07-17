@@ -12,7 +12,6 @@ import {
   t,
 } from "@opentui/core"
 
-import { startLimitsPoller } from "./limits"
 import { log } from "./log"
 import { openIterateOpencodeWindow, openOpencodeSessionWindow, openStoredSessionWindow } from "./opencode"
 import { PhaseUsage, addTokens, emptyTokens } from "./usage"
@@ -24,7 +23,6 @@ import {
   formatTime,
   displayWidth,
   joinLines,
-  limitsRow,
   padBetween,
   paletteForTerminal,
   plain,
@@ -44,7 +42,6 @@ import {
 } from "./tui-theme"
 
 import type { BoxOptions, CliRenderer, KeyEvent, TextChunk } from "@opentui/core"
-import type { LimitsSnapshot } from "./limits"
 import type { PaletteColor, PhaseStatus } from "./tui-theme"
 import type {
   ActivityKind,
@@ -259,10 +256,6 @@ export class TuiProgress implements ProgressUI {
   // via phaseMessage and repainted on the ticker, not per delta.
   private readonly transcripts = new Map<string, TranscriptBlock[]>()
   private readonly ticker: ReturnType<typeof setInterval>
-  // Subscription meters (GPT windows, OpenRouter credits) polled in the
-  // background; the 250ms ticker just repaints whatever the last poll left.
-  private readonly stopLimits: () => void
-  private limits?: LimitsSnapshot
   private readonly dirText: TextRenderable
   private readonly headerText: TextRenderable
   private readonly pipelineBox: BoxRenderable
@@ -763,9 +756,6 @@ export class TuiProgress implements ProgressUI {
     renderer.on("theme_mode", this.handleThemeMode)
 
     this.ticker = setInterval(() => this.render(), 250)
-    this.stopLimits = startLimitsPoller((snapshot) => {
-      this.limits = snapshot
-    })
     this.render()
   }
 
@@ -1203,7 +1193,6 @@ export class TuiProgress implements ProgressUI {
 
   stop() {
     clearInterval(this.ticker)
-    this.stopLimits()
     log.mute(false)
     this.renderer.keyInput.off("keypress", this.handleKeyPress)
     this.renderer.off("theme_mode", this.handleThemeMode)
@@ -1593,7 +1582,7 @@ export class TuiProgress implements ProgressUI {
         this.finished.status === "completed" ? bold(fg(theme.green)("✓ run completed")) : bold(fg(theme.red)("✗ run failed")),
       )
     }
-    return joinLines([padBetween(title, totals, width), limitsRow(this.limits, now, width)])
+    return padBetween(title, totals, width)
   }
 
   // The working directory renders above the header box, outside its border.

@@ -55,16 +55,6 @@ describe("cli parsing", () => {
     if (command.type === "help") expect(command.text).toContain("archer [prompt]")
   })
 
-  test("parses the auth subcommand grammar", async () => {
-    expect(await parseCommand(["auth"])).toEqual({ type: "auth", provider: "openrouter", action: "status" })
-    expect(await parseCommand(["auth", "status"])).toEqual({ type: "auth", provider: "openrouter", action: "status" })
-    expect(await parseCommand(["auth", "openrouter"])).toEqual({ type: "auth", provider: "openrouter", action: "set" })
-    expect(await parseCommand(["auth", "openrouter", "--remove"])).toEqual({ type: "auth", provider: "openrouter", action: "remove" })
-
-    await expect(parseCommand(["auth", "anthropic"])).rejects.toThrow("usage: archer auth")
-    await expect(parseCommand(["auth", "openrouter", "--bogus"])).rejects.toThrow("usage: archer auth")
-  })
-
   test("requires prompt unless resuming", async () => {
     await expect(parseCommand([])).rejects.toThrow("need a prompt")
 
