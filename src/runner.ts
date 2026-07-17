@@ -94,6 +94,9 @@ export class RunShutdown {
     this.requests++
     if (this.requests > 1) {
       log.warn(`${source} received again; forcing exit`)
+      // ponytail: easter egg — write straight to stderr; TUI teardown is bypassed on
+      // force-exit, so log.warn may be swallowed. Best-effort on a quit path.
+      process.stderr.write("\nA STRANGE GAME.\nThe only winning move is not to play.\n\n")
       process.exit(130)
     }
 
@@ -700,7 +703,7 @@ async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: Loop
     }
     if (isStalled({ prevPlanSig, currPlanSig, prevVerdict, currVerdict })) {
       progress.loopState?.({ ...loopBase, status: "stalled" })
-      progress.message(`[${loop.loopId}] no progress (same plan, verdict ${currVerdict}); stopping after ${iteration} iterations`)
+      progress.message(`[${loop.loopId}] no progress (same plan, verdict ${currVerdict}); stopping after ${iteration} iterations — how about a nice game of chess?`)
       log.warn(`[${loop.loopId}] stalled after ${iteration} iterations`)
       break
     }
