@@ -250,12 +250,16 @@ export function budgetBar(spent: number | undefined, cap: number | undefined, wi
         ? theme.yellow
         : theme.green
 
-  // Format: BUDGET $1.23/$5.00 (24%) ▓▓▓░░░░░
-  const prefix = `BUDGET ${formatMoney(spent)}/${formatMoney(cap)} (${pct}%)`
-  const barWidth = Math.max(4, width - displayWidth(prefix) - 1)
+  // Labeled metric, matching the rest of the UI: a dim "BUDGET" label with
+  // the value and progress bar colored by the spend ratio (green < 60%,
+  // yellow < 90%, red ≥ 90% or over cap). The bar color encodes the state;
+  // the label stays quiet like the other readouts (CONVERGE, verdict, dir).
+  const label = fg(theme.dim)("BUDGET ")
+  const value = `${formatMoney(spent)}/${formatMoney(cap)} (${pct}%)`
+  const barWidth = Math.max(4, width - displayWidth(label.text) - displayWidth(value) - 1)
   const bar = progressBar(fraction, barWidth, color)
 
-  return [fg(color)(prefix), raw(" "), ...bar]
+  return [label, fg(color)(value), raw(" "), ...bar]
 }
 
 export function formatCount(value: number) {
