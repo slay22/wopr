@@ -1,6 +1,4 @@
-import { builtInAgents } from "./pipeline"
 import { estimateCost, loadModelCatalog, type ModelCatalog } from "./cost"
-import type { AgentSpec, AgentStep, Pipeline } from "./types"
 
 /** Preferences for budget-based config suggestion. */
 export type BudgetPreferences = {

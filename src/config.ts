@@ -24,7 +24,7 @@ import {
   type PipelineSpec,
   type StepSpec,
 } from "./pipeline"
-import type { AgentSpec, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
+import type { AgentSpec, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
 import { woprHome, woprRoot, globalConfigPath } from "./workspace"
 
 /**
@@ -51,6 +51,8 @@ export type WoprDefaults = {
   branchNameModel?: string
   /** Keep the isolated worktree (--worktree) after a successful run; false auto-removes its checkout, keeping the branch. Defaults to true. */
   keepWorktree?: boolean
+  /** Per-run budget cap; CLI > pipeline.budget > defaults.budget > none. */
+  budget?: Budget
 }
 
 /** A project agent definition, or model/temperature/readOnly overrides for a built-in one. */
@@ -358,6 +360,7 @@ function validateDefaults(v: Validator, raw: unknown): WoprDefaults {
   if (record.autoAcceptJudgeModel !== undefined) defaults.autoAcceptJudgeModel = v.model(record.autoAcceptJudgeModel, "defaults.autoAcceptJudgeModel")
   if (record.branchNameModel !== undefined) defaults.branchNameModel = v.model(record.branchNameModel, "defaults.branchNameModel")
   if (record.keepWorktree !== undefined) defaults.keepWorktree = v.boolean(record.keepWorktree, "defaults.keepWorktree")
+  if (record.budget !== undefined) defaults.budget = validateBudget(v, record.budget, "defaults.budget")
   return defaults
 }
 
@@ -399,13 +402,14 @@ function validatePipelines(v: Validator, raw: unknown): Record<string, PipelineS
   for (const [name, value] of Object.entries(record)) {
     const path = `pipelines.${name}`
     const entry = v.record(value, path)
-    v.knownKeys(entry, path, ["description", "steps"])
+    v.knownKeys(entry, path, ["description", "steps", "budget"])
 
     if (!Array.isArray(entry.steps) || entry.steps.length === 0) v.fail(`${path}.steps`, "must be a non-empty list of steps")
     const steps = (entry.steps as unknown[]).map((step, index) => validateStep(v, step, `${path}.steps[${index}]`))
 
     pipelines[name] = {
       ...(entry.description !== undefined ? { description: v.nonEmptyString(entry.description, `${path}.description`) } : {}),
+      ...(entry.budget !== undefined ? { budget: validateBudget(v, entry.budget, `${path}.budget`) } : {}),
       steps,
     }
   }
