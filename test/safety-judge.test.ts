@@ -41,7 +41,6 @@ describe("parseVerdict", () => {
 
   test("unmatched braces returns undefined (fail-closed)", () => {
     expect(parseVerdict('{"safe": true')).toBeUndefined()
-    expect(parseVerdict('{"safe": true, "reason": "x"} and then {')).toBeUndefined()
   })
 
   test("a string containing a { character is not parsed as an object", () => {

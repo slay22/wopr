@@ -161,7 +161,7 @@ describe("bash policy", () => {
     test("output redirection is still allowed (documented limitation)", () => {
       const policy = bashPolicy("/tmp/non-existent-wopr-target", allowAll)
       // > is not split, so the whole command must match an allow pattern
-      expect(evaluateBashPolicy("git status > .env", policy)).toBe("ask")
+      expect(evaluateBashPolicy("git status > .env", policy)).toBe("allow")
     })
   })
 

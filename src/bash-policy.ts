@@ -152,14 +152,6 @@ export const baseAllowBashPatterns = [
     "du -sh*",
     "true",
     "false",
-    "whoami",
-    "file*",
-    "tree*",
-    "stat*",
-    "jq*",
-    "du -sh*",
-    "true",
-    "false",
 ]
 
 // Hard denylist. Never relaxed — --yolo and the shift+tab auto-accept toggle
