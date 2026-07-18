@@ -110,8 +110,10 @@ export function loadModelCatalog(): ModelCatalog {
     return cachedCatalog
   } catch (error) {
     log.warn(`couldn't load model catalog from ${modelsStorePath()}: ${error instanceof Error ? error.message : String(error)}`)
-    cachedCatalog = new ModelCatalog([])
-    return cachedCatalog
+    // Do not cache the empty fallback: a later call may succeed once the
+    // catalog exists, and permanently caching the failure would make every
+    // subsequent estimate $0 (see security review finding).
+    return new ModelCatalog([])
   }
 }
 

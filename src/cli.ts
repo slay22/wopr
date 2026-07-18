@@ -47,6 +47,8 @@ export type ParsedArgs = {
   smartModel?: string
   budget?: string
   budgetMode?: string
+  /** When --no-budget is passed, the budget is cleared even if set in config. */
+  noBudget?: boolean
 }
 
 export type InitOptions = {
@@ -364,7 +366,10 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
 
   // Budget precedence: CLI flag > pipeline.budget > defaults.budget > none
   let budget: Budget | undefined
-  if (parsed.budget !== undefined) {
+  if (parsed.noBudget) {
+    // --no-budget is an explicit opt-out: clear any budget from config too.
+    budget = undefined
+  } else if (parsed.budget !== undefined) {
     // Use Number() (not parseFloat) so trailing junk like "5.00abc" is rejected
     // outright instead of silently truncating to 5.
     const perRun = Number(parsed.budget)
@@ -374,6 +379,12 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     budget = pipeline.budget
   } else if (defaults.budget) {
     budget = defaults.budget
+  }
+
+  // --budget-mode selects hard/soft cap regardless of where the budget came
+  // from (CLI, pipeline override, or defaults), so it works without editing YAML.
+  if (budget && parsed.budgetMode) {
+    budget = { ...budget, onExceed: parsed.budgetMode === "warn" ? "warn-and-continue" : "abort" }
   }
 
   const options: Omit<RunOptions, "prompt"> = {
@@ -501,6 +512,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break
       case "--no-budget":
         parsed.budget = undefined
+        parsed.noBudget = true
         break
       case "--budget-mode":
         parsed.budgetMode = takeValue()

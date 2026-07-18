@@ -144,6 +144,7 @@ describe("cli parsing", () => {
   test("--no-budget clears the budget", () => {
     const parsed = parseArgs(["--no-budget", "prompt"])
     expect(parsed.budget).toBeUndefined()
+    expect(parsed.noBudget).toBe(true)
   })
 
   test("rejects invalid --budget-mode", () => {
@@ -210,6 +211,55 @@ describe("config precedence", () => {
     expect(command.options.pipeline.name).toBe("quick")
     expect(stepNames(command.options.pipeline)).toEqual(["implementer", "tests"])
     expect(command.options.files).toEqual(["docs.md"])
+  })
+
+  async function projectWithBudgetConfig() {
+    const dir = await mkdtemp(join(tmpdir(), "wopr-cli-budget-"))
+    dirs.push(dir)
+    await mkdir(join(dir, ".wopr"), { recursive: true })
+    await writeFile(join(dir, "docs.md"), "# notes")
+    await writeFile(
+      join(dir, ".wopr", "config.yaml"),
+      [
+        "defaults:",
+        "  budget:",
+        "    perRun: 10.00",
+        "  pipeline: quick",
+        "pipelines:",
+        "  quick:",
+        "    steps:",
+        "      - implementer",
+        "      - tests",
+      ].join("\n"),
+    )
+    return dir
+  }
+
+  test("config budget applies when no flag is passed", async () => {
+    const dir = await projectWithBudgetConfig()
+    const parsed = parseArgs(["prompt"])
+    parsed.targetDir = dir
+    const options = await resolveRunOptions(parsed)
+    expect(options.budget?.perRun).toBe(10)
+    // onExceed omitted in config -> defaults to abort
+    expect(options.budget?.onExceed).toBeUndefined()
+  })
+
+  test("--no-budget clears a config budget", async () => {
+    const dir = await projectWithBudgetConfig()
+    const parsed = parseArgs(["--no-budget", "prompt"])
+    parsed.targetDir = dir
+    const options = await resolveRunOptions(parsed)
+    expect(options.budget).toBeUndefined()
+  })
+
+  test("--budget-mode overrides a config budget's onExceed", async () => {
+    const dir = await projectWithBudgetConfig()
+    const parsed = parseArgs(["--budget-mode", "warn", "prompt"])
+    parsed.targetDir = dir
+    const options = await resolveRunOptions(parsed)
+    expect(options.budget?.perRun).toBe(10)
+    expect(options.budget?.onExceed).toBe("warn-and-continue")
   })
 
   test("CLI flags always win over config defaults", async () => {
