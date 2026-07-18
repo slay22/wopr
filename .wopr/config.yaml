@@ -13,9 +13,11 @@ defaults:
   branchNameModel: opencode/deepseek-v4-flash-free
 
 agents:
-  # Project-level overrides for the agents `refine` uses. These beat the
-  # built-in agent's `defaultModel` (`gpt-5.6-terra#xhigh`) and project
-  # `defaults.model` per the precedence chain (step > agent > defaults).
+  # Project-level overrides for the agents both `refine` and `implement` use.
+  # These beat the built-in agent's `defaultModel` (`gpt-5.6-terra#xhigh`)
+  # and project `defaults.model` per the precedence chain
+  # (step > agent > defaults).
+  # Agents from `refine`:
   review-scope:
     model: opencode/deepseek-v4-flash-free
   bug-auditor:
@@ -29,6 +31,19 @@ agents:
   review-fixer:
     model: opencode/deepseek-v4-flash-free
   review-validator:
+    model: opencode/hy3-free
+  # Agents from `implement`:
+  implementer:
+    model: opencode/deepseek-v4-flash-free
+  pattern-auditor:
+    model: opencode/deepseek-v4-flash-free
+  security-auditor:
+    model: opencode/hy3-free
+  design-polisher:
+    model: opencode/hy3-free
+  test-engineer:
+    model: opencode/deepseek-v4-flash-free
+  adversarial-reviewer:
     model: opencode/hy3-free
 
 pipelines:
@@ -66,5 +81,31 @@ pipelines:
         reports: [triage]
       - agent: review-validator
         name: validator
+        model: opencode/hy3-free
+        reports: all
+  # Explicit `implement` override — same free-tier model mix as `refine`.
+  # Strongest free model (`hy3-free`) on the three security-critical agents
+  # (security-auditor, design-polisher for any UI work, adversarial-reviewer);
+  # `deepseek-flash-free` on the rest.
+  implement:
+    description: "Free-tier implement: deepseek-flash-free for code, hy3-free for security-critical agents"
+    steps:
+      - agent: implementer
+        reports: none
+      - agent: pattern-auditor
+        name: patterns
+        model: opencode/deepseek-v4-flash-free
+      - agent: security-auditor
+        name: security
+        model: opencode/hy3-free
+      - agent: design-polisher
+        name: design
+        model: opencode/hy3-free
+      - agent: test-engineer
+        name: tests
+        model: opencode/deepseek-v4-flash-free
+        reports: none
+      - agent: adversarial-reviewer
+        name: adversarial
         model: opencode/hy3-free
         reports: all
