@@ -1,0 +1,70 @@
+version: 1
+
+# WOPR project config — scoped to this repository.
+# Free-tier model overrides for the `refine` pipeline so dogfooding security
+# audits on this codebase doesn't burn paid budget. Strongest free model
+# (`hy3-free`) goes on the three security-critical agents: the security
+# reviewer, the adversarial triager, and the final validator. Reading and
+# writing agents stay on the user's existing default (`deepseek-v4-flash-free`).
+
+defaults:
+  model: opencode/deepseek-v4-flash-free
+  autoAcceptJudgeModel: opencode/hy3-free
+  branchNameModel: opencode/deepseek-v4-flash-free
+
+agents:
+  # Project-level overrides for the agents `refine` uses. These beat the
+  # built-in agent's `defaultModel` (`gpt-5.6-terra#xhigh`) and project
+  # `defaults.model` per the precedence chain (step > agent > defaults).
+  review-scope:
+    model: opencode/deepseek-v4-flash-free
+  bug-auditor:
+    model: opencode/deepseek-v4-flash-free
+  clean-code-auditor:
+    model: opencode/deepseek-v4-flash-free
+  security-reviewer:
+    model: opencode/hy3-free
+  review-adversary:
+    model: opencode/hy3-free
+  review-fixer:
+    model: opencode/deepseek-v4-flash-free
+  review-validator:
+    model: opencode/hy3-free
+
+pipelines:
+  # Explicit `refine` override matching the per-agent choices above. Mirrors
+  # the built-in `refine` definition but with free-tier models everywhere.
+  # If you'd rather use a paid model for higher confidence, swap `hy3-free`
+  # for `opencode/claude-haiku-4-5` ($1/$5 per M, ~$1-2 for a full run).
+  refine:
+    description: "Free-tier refine: deepseek-flash-free for read/write, hy3-free for security-critical agents"
+    steps:
+      - agent: review-scope
+        name: scope
+        model: opencode/deepseek-v4-flash-free
+        reports: none
+        diff: true
+      - agent: bug-auditor
+        name: bugs
+        model: opencode/deepseek-v4-flash-free
+        reports: [scope]
+      - agent: clean-code-auditor
+        name: clean-code
+        model: opencode/deepseek-v4-flash-free
+        reports: [scope]
+      - agent: security-reviewer
+        name: security
+        model: opencode/hy3-free
+        reports: [scope]
+      - agent: review-adversary
+        name: triage
+        model: opencode/hy3-free
+        reports: [scope, bugs, clean-code, security]
+      - agent: review-fixer
+        name: fixes
+        model: opencode/deepseek-v4-flash-free
+        reports: [triage]
+      - agent: review-validator
+        name: validator
+        model: opencode/hy3-free
+        reports: all
