@@ -168,6 +168,8 @@ export type ProgressUI = {
   runFinished?(outcome: RunOutcome): Promise<void>
   /** True when the finish screen handed the run dir to an iterate session ([i]), so cleanup must skip it. */
   keepRunDirRequested?(): boolean
+  /** Update budget tracking; budget is the cap (optional) and spent is the current total. */
+  updateBudget?(budget: { perRun: number; onExceed?: "abort" | "warn-and-continue" }, spent: number): void
   /** Reports the current converge-loop iteration/verdict; the dashboard renders it in the header. */
   loopState?(info: LoopProgress): void
   message(message: string): void

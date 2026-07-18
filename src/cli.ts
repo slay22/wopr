@@ -45,6 +45,8 @@ export type ParsedArgs = {
   yolo?: boolean
   smart?: boolean
   smartModel?: string
+  budget?: string
+  budgetMode?: string
 }
 
 export type InitOptions = {
@@ -360,6 +362,17 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
   const smartJudgeModel =
     parsed.smartModel || defaults.autoAcceptJudgeModel || parsed.modelOverride || defaults.model || `${defaultGptModel}#${defaultGptVariant}`
 
+  // Budget precedence: CLI flag > pipeline.budget > defaults.budget > none
+  let budget: Budget | undefined
+  if (parsed.budget !== undefined) {
+    budget = { perRun: parseFloat(parsed.budget), onExceed: parsed.budgetMode === "warn" ? "warn-and-continue" : "abort" }
+    if (!Number.isFinite(budget.perRun) || budget.perRun <= 0) throw new Error(`--budget must be a positive number, got "${parsed.budget}"`)
+  } else if (pipeline.budget) {
+    budget = pipeline.budget
+  } else if (defaults.budget) {
+    budget = defaults.budget
+  }
+
   const options: Omit<RunOptions, "prompt"> = {
     files: [...(config?.attachments ?? []), ...parsed.files],
     onlySteps: parsed.onlySteps,
@@ -378,6 +391,7 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     yolo: parsed.yolo ?? false,
     smart: parsed.smart ?? false,
     smartJudgeModel,
+    budget,
     pipeline,
     agents,
     permissions: config?.permissions ?? { allow: [], deny: [] },
@@ -478,6 +492,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break
       case "--include-dirty":
         parsed.includeDirty = true
+        break
+      case "--budget":
+        parsed.budget = takeValue()
+        break
+      case "--no-budget":
+        parsed.budget = undefined
+        break
+      case "--budget-mode":
+        parsed.budgetMode = takeValue()
+        if (parsed.budgetMode !== "abort" && parsed.budgetMode !== "warn") throw new Error('--budget-mode must be "abort" or "warn"')
         break
       case "--yolo":
         parsed.yolo = true
@@ -583,6 +607,9 @@ Flags:
   --keep-worktree          Keep the --worktree checkout after a successful run (default; overrides defaults.keepWorktree)
   --no-keep-worktree       Auto-remove the --worktree checkout after a successful run (the branch is kept)
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
+  --budget <usd>           Hard cost cap; run aborts before exceeding this (e.g. --budget 5.00)
+  --no-budget              Clear any budget set in the project/global config
+  --budget-mode abort|warn Whether to abort (default) or warn-and-continue when the budget is exceeded
   --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)
   --no-tui                 Disable visual phase progress

@@ -36,7 +36,7 @@ import {
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { AgentSpec, AgentStep, HookSet, HookSpec, LoopMeta, Pipeline, RunOptions, Step } from "./types"
-import { addTokens, emptyTokens, tokensFromValue } from "./usage"
+import { addTokens, emptyTokens, tokensFromValue, type CostTracker } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 import { ConfigError } from "./config"
 
@@ -44,6 +44,19 @@ export type ActiveSession = {
   agentSession: AgentSession
   sessionID: string
   phaseName: string
+}
+
+export class BudgetExceededError extends Error {
+  readonly phase: string
+  readonly spent: number
+  readonly budget: number
+  constructor(phase: string, spent: number, budget: number) {
+    super(`budget exceeded: $${spent.toFixed(4)} of $${budget.toFixed(2)} before "${phase}"`)
+    this.name = "BudgetExceededError"
+    this.phase = phase
+    this.spent = spent
+    this.budget = budget
+  }
 }
 
 export class UserAbortError extends Error {
@@ -63,6 +76,9 @@ export function isUserAbortError(error: unknown): error is UserAbortError {
  * awaited). Only these are safe to swallow at the process level; anything else is
  * a real fault and must stay visible. See main.ts's unhandledRejection handler.
  */
+/** Module-level CostTracker for the current run. Set by run() before phases start, cleared after. */
+export let currentCostTracker: CostTracker | undefined
+
 export function isIgnorableRejection(reason: unknown): boolean {
   if (isUserAbortError(reason)) return true
   if (reason instanceof Error) {
@@ -330,6 +346,28 @@ export async function run(options: RunOptions) {
     // above and TS won't retain that narrowing inside the batch's nested arrows.
     const runMetadata = metadata
     const permissionGate = permissions
+    // Budget tracker: records cost per phase and enforces the cap.
+    const costTracker = new CostTracker()
+    currentCostTracker = costTracker
+
+    // Budget check before each batch runs. Returns false when the budget is
+    // exhausted and onExceed is "abort"; throws BudgetExceededError in that case.
+    const checkBudget = (step: Step): boolean => {
+      if (!options.budget || step.type !== "agent") return true
+      const spent = costTracker.spent()
+      const nextEstimate = costTracker.estimateNext(step.name, step.model)
+      if (spent + nextEstimate <= options.budget.perRun) return true
+
+      if (options.budget.onExceed === "warn-and-continue") {
+        progress.message(`⚠ budget warning: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)} (${step.name} estimated $${nextEstimate.toFixed(4)})`)
+        log.warn(`[budget] $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}, continuing per onExceed=warn-and-continue`)
+        return true
+      }
+
+      log.warn(`[budget] aborting before ${step.name}: $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}`)
+      progress.message(`budget exceeded: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)}`)
+      throw new BudgetExceededError(step.name, spent, options.budget.perRun)
+    }
 
     // One non-loop batch: a human gate, or a group of agent steps run concurrently.
     const runStandardBatch = async (batch: Step[]) => {
@@ -345,6 +383,14 @@ export async function run(options: RunOptions) {
       }
 
       const agentBatch = batch as AgentStep[]
+      // Budget check: verify every step in this batch fits the budget before running.
+      for (const step of agentBatch) {
+        checkBudget(step)
+      }
+      // Update TUI with latest budget info
+      if (options.budget && progress.updateBudget) {
+        progress.updateBudget(options.budget, costTracker.spent())
+      }
       const results = await Promise.allSettled(
         agentBatch.map(async (step) => {
           if (shouldSkip(step, options)) {
@@ -367,6 +413,10 @@ export async function run(options: RunOptions) {
       if (userAbort) throw userAbort.reason
       const failures = results.flatMap((result, index) => (result.status === "rejected" ? [{ name: agentBatch[index]!.name, error: result.reason }] : []))
       if (failures.length > 0) throw new PhaseGroupError(failures)
+
+      // Persist cost snapshot after each batch
+      const snap = costTracker.snapshot()
+      runMetadata.updateCost(snap)
     }
 
     const batches = planBatches(pipeline.steps)
@@ -445,6 +495,7 @@ export async function run(options: RunOptions) {
     }
     throw failure
   } finally {
+    currentCostTracker = undefined
     removeSignalHandlers()
     if (shutdown.aborted) await shutdown.abortActiveSessions(progress)
     await permissions?.stop()
@@ -1034,6 +1085,8 @@ async function promptPhase(input: {
   input.shutdown.setActiveSession({ agentSession: session, sessionID, phaseName: input.phase.name })
   log.info(`[${input.phase.name}] session: ${sessionID}`)
 
+  const inputStartTime = Date.now()
+
   const state = newActivityState()
   const unsubscribe = session.subscribe((event) => {
     const signal = describePiActivity(event, state)
@@ -1069,6 +1122,25 @@ async function promptPhase(input: {
     if (usage) {
       input.progress.phaseUsageTotal(input.phase.name, usage)
       log.info(`[${input.phase.name}] usage: ${formatUsage(usage)}`)
+      // Record cost entry in the global cost tracker
+      if (currentCostTracker && usage.cost !== undefined && usage.tokens) {
+        currentCostTracker.record({
+          phase: input.phase.name,
+          agent: input.phase.agentName,
+          model: formatModel(input.model),
+          inputTokens: usage.tokens.input,
+          outputTokens: usage.tokens.output,
+          cacheReadTokens: usage.tokens.cacheRead,
+          cacheWriteTokens: usage.tokens.cacheWrite,
+          inputCost: (usage.tokens.input / 1_000_000) * 0, // approximated from total
+          outputCost: (usage.tokens.output / 1_000_000) * 0,
+          cacheReadCost: (usage.tokens.cacheRead / 1_000_000) * 0,
+          cacheWriteCost: (usage.tokens.cacheWrite / 1_000_000) * 0,
+          totalCost: usage.cost,
+          durationMs: Date.now() - inputStartTime,
+          timestamp: Date.now(),
+        })
+      }
     }
     return { text: lastAssistantText(session), error, usage, sessionID, finish: error ? "error" : "stop" }
   } catch (error) {

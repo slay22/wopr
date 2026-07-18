@@ -1,5 +1,14 @@
 import type { EvaluationConfig } from "./evaluate"
 
+export type Budget = {
+  /** Hard cap in USD; the run aborts when spent + next_phase_estimate exceeds this. */
+  perRun: number
+  /** What to do when the cap is hit. Default: "abort". */
+  onExceed?: "abort" | "warn-and-continue"
+  /** Optional per-phase caps; falls back to perRun when a phase has no entry. */
+  perPhase?: Record<string, number>
+}
+
 export type RunOptions = {
   prompt: string
   files: string[]
@@ -26,6 +35,8 @@ export type RunOptions = {
   smart: boolean
   /** Resolved model for the smart auto-accept judge (--smart-model → config → --model → defaults.model). */
   smartJudgeModel: string
+  /** Budget for this run; CLI flag > pipeline.budget > defaults.budget > none. */
+  budget?: Budget
   /** Resolved pipeline for new runs; resumed runs replay the pipeline frozen in their metadata. */
   pipeline: Pipeline
   /** Resolved agent registry (built-ins plus project agents) used to assemble the opencode config. */
@@ -88,6 +99,15 @@ export type AgentSpec = {
   builtIn: boolean
 }
 
+export type Pipeline = {
+  name: string
+  description?: string
+  steps: Step[]
+  loops?: LoopMeta[]
+  /** Per-pipeline budget override; wins over defaults.budget. */
+  budget?: Budget
+}
+
 export type AgentStep = {
   type: "agent"
   name: string
@@ -134,9 +154,4 @@ export type LoopMeta = {
   evaluation?: EvaluationConfig
 }
 
-export type Pipeline = {
-  name: string
-  description?: string
-  steps: Step[]
-  loops?: LoopMeta[]
-}
+

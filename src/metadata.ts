@@ -11,7 +11,7 @@ import type {
   ProgressUsage,
 } from "./progress"
 import type { Pipeline } from "./types"
-import { PhaseUsage } from "./usage"
+import { PhaseUsage, type RunCost } from "./usage"
 import type { Workspace } from "./workspace"
 
 export type PhaseMetadataStatus = "pending" | "running" | "completed" | "skipped" | "failed"
@@ -38,6 +38,8 @@ export type RunMetadata = {
   /** The live opencode server for this run while it executes; cleared on shutdown, so a lingering entry means the run process died mid-flight. Lets `wopr runs` attach to a running run. */
   server?: { url: string; pid: number; startedAt: number }
   phases: Record<string, PhaseMetadata>
+  /** Cost snapshot; written on every phase end and on run completion. */
+  cost?: RunCost
 }
 
 export type RunMetadataStore = {
@@ -47,6 +49,8 @@ export type RunMetadataStore = {
   /** Records the run's live opencode server URL so `wopr runs` can attach; cleared by serverStopped. */
   serverStarted(url: string): void
   serverStopped(): void
+  /** Persist a cost snapshot into metadata. */
+  updateCost(cost: RunCost): void
   phaseStarted(name: string): void
   phaseSession(name: string, sessionID: string): void
   phaseStepUsage(name: string, usage: ProgressStepUsage): void
@@ -137,6 +141,10 @@ export async function openRunMetadata(workspace: Workspace, targetDir: string, p
       data.server = undefined
       void persist()
     },
+    updateCost(cost: RunCost) {
+      data.cost = cost
+      scheduleSave()
+    },
     phaseStarted(name) {
       const entry = phase(name)
       entry.status = "running"
@@ -215,6 +223,7 @@ export function recordProgress(progress: ProgressUI, store: RunMetadataStore): P
     },
     phaseRestored: (name, snapshot) => progress.phaseRestored(name, snapshot),
     loopState: (info) => progress.loopState?.(info),
+    updateBudget: (budget, spent) => progress.updateBudget?.(budget, spent),
     message: (message) => progress.message(message),
     suspend: () => progress.suspend(),
     resume: () => progress.resume(),

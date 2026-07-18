@@ -233,6 +233,31 @@ export function formatMoney(cost: number) {
   return `$${cost.toFixed(cost >= 1 ? 2 : 4)}`
 }
 
+/**
+ * Budget meter bar: renders spent/cap with a progress bar and color coding.
+ * Green when spent < 60% of cap, yellow when < 90%, red when ≥ 90% or exceeded.
+ * Returns an empty array when spent is undefined or cap is 0.
+ */
+export function budgetBar(spent: number | undefined, cap: number | undefined, width = 20): TextChunk[] {
+  if (spent === undefined || cap === undefined || cap <= 0) return []
+  const fraction = Math.min(1, spent / cap)
+  const pct = Math.round(fraction * 100)
+
+  const color =
+    spent > cap || fraction >= 0.9
+      ? theme.red
+      : fraction >= 0.6
+        ? theme.yellow
+        : theme.green
+
+  // Format: BUDGET $1.23/$5.00 (24%) ▓▓▓░░░░░
+  const prefix = `BUDGET ${formatMoney(spent)}/${formatMoney(cap)} (${pct}%)`
+  const barWidth = Math.max(4, width - displayWidth(prefix) - 1)
+  const bar = progressBar(fraction, barWidth, color)
+
+  return [fg(color)(prefix), raw(" "), ...bar]
+}
+
 export function formatCount(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`

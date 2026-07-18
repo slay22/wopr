@@ -16,6 +16,7 @@ import { log } from "./log"
 import { openIterateOpencodeWindow, openOpencodeSessionWindow, openStoredSessionWindow } from "./opencode"
 import { PhaseUsage, addTokens, emptyTokens } from "./usage"
 import {
+  budgetBar,
   formatAgo,
   formatCount,
   formatElapsed,
@@ -253,6 +254,10 @@ export class TuiProgress implements ProgressUI {
   private readonly phases: PhaseState[]
   /** Latest converge-loop state, rendered in the header while a loop group runs. */
   private loop?: LoopProgress
+  /** Budget tracking: cap (perRun) and current spent amount. */
+  private budgetCap?: number
+  private budgetSpent = 0
+  private budgetOnExceed?: "abort" | "warn-and-continue"
   private readonly feed: FeedEntry[] = []
   // The live model transcript per phase (the session tab): verbatim reasoning
   // and response text, interleaved with tool/bash action markers. Streamed in
@@ -1006,6 +1011,12 @@ export class TuiProgress implements ProgressUI {
     return this.iterateRequested
   }
 
+  updateBudget(budget: { perRun: number; onExceed?: "abort" | "warn-and-continue" }, spent: number): void {
+    this.budgetCap = budget.perRun
+    this.budgetSpent = spent
+    this.budgetOnExceed = budget.onExceed
+  }
+
   // The focused phase, clamped to a valid index (the pipeline can be empty
   // only in degenerate cases). Shared by rendering and [o].
   private focusedPhase(): PhaseState | undefined {
@@ -1593,6 +1604,11 @@ export class TuiProgress implements ProgressUI {
         this.finished.status === "completed" ? bold(fg(theme.green)("✓ run completed")) : bold(fg(theme.red)("✗ run failed")),
       )
     }
+    // Budget meter: shown next to DEFCON when a budget is configured
+    const budgetChunks = this.budgetCap !== undefined && this.budgetCap > 0
+      ? [fg(theme.faint)("  ·  "), ...budgetBar(this.budgetSpent, this.budgetCap, Math.max(10, Math.floor(width * 0.35)))]
+      : []
+    title.push(...budgetChunks)
     const line1 = padBetween(title, totals, width)
     return this.loop ? joinLines([line1, this.convergeLine()]) : line1
   }

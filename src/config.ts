@@ -172,6 +172,9 @@ defaults:
   # pipeline: implement
   # branchNameModel: anthropic/claude-haiku-4-5 # optional: model that names worktree branches
   # keepWorktree: false # optional: auto-remove a --worktree checkout after a successful run (the branch is kept); defaults to true
+  # budget:
+  #   perRun: 10.00 # hard cap in USD; run aborts before exceeding this
+  #   onExceed: abort # abort | warn-and-continue
 
 # Agents are matched by name with Markdown prompts next to this config:
 #   agents/<name>.md
@@ -345,7 +348,7 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
 
 function validateDefaults(v: Validator, raw: unknown): WoprDefaults {
   const record = v.record(raw, "defaults")
-  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "autoAcceptJudgeModel", "branchNameModel", "keepWorktree"])
+  v.knownKeys(record, "defaults", ["model", "maxAttempts", "baseRef", "pipeline", "autoAcceptJudgeModel", "branchNameModel", "keepWorktree", "budget"])
 
   const defaults: WoprDefaults = {}
   if (record.model !== undefined) defaults.model = v.model(record.model, "defaults.model")
@@ -458,6 +461,32 @@ function validateStep(v: Validator, raw: unknown, path: string, context: { insid
     ...(record.reports !== undefined ? { reports: validateReports(v, record.reports, `${path}.reports`) } : {}),
     ...(record.diff !== undefined ? { diff: v.boolean(record.diff, `${path}.diff`) } : {}),
   }
+}
+
+function validateBudget(v: Validator, raw: unknown, path: string): Budget {
+  const record = v.record(raw, path)
+  v.knownKeys(record, path, ["perRun", "onExceed", "perPhase"])
+
+  const perRun = v.positiveNumber(record.perRun, `${path}.perRun`)
+  const budget: Budget = { perRun }
+
+  if (record.onExceed !== undefined) {
+    if (record.onExceed !== "abort" && record.onExceed !== "warn-and-continue") {
+      v.fail(`${path}.onExceed`, 'must be "abort" or "warn-and-continue"')
+    }
+    budget.onExceed = record.onExceed
+  }
+
+  if (record.perPhase !== undefined) {
+    const pp = v.record(record.perPhase, `${path}.perPhase`)
+    const perPhase: Record<string, number> = {}
+    for (const [key, value] of Object.entries(pp)) {
+      perPhase[key] = v.positiveNumber(value, `${path}.perPhase.${key}`)
+    }
+    budget.perPhase = perPhase
+  }
+
+  return budget
 }
 
 function validateReports(v: Validator, raw: unknown, path: string): "previous" | "all" | "none" | string[] {
@@ -698,6 +727,11 @@ class Validator {
 
   positiveInt(value: unknown, path: string): number {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) this.fail(path, "must be a positive integer")
+    return value
+  }
+
+  positiveNumber(value: unknown, path: string): number {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) this.fail(path, "must be a positive number")
     return value
   }
 

@@ -1,5 +1,5 @@
 import type { EvaluationConfig } from "./evaluate"
-import type { AgentSpec, AgentStep, HumanStep, LoopMeta, Pipeline, Step } from "./types"
+import type { AgentSpec, AgentStep, Budget, HumanStep, LoopMeta, Pipeline, Step } from "./types"
 
 export const defaultGptModel = "openai/gpt-5.6-terra"
 export const defaultGptVariant = "xhigh"
@@ -236,6 +236,7 @@ export type StepSpec = string | AgentStepSpec | HumanStepSpec | ParallelStepSpec
 
 export type PipelineSpec = {
   description?: string
+  budget?: Budget
   steps: StepSpec[]
 }
 
@@ -537,6 +538,7 @@ export function resolvePipeline(input: ResolvePipelineInput): Pipeline {
   return {
     name: input.name,
     ...(input.spec.description ? { description: input.spec.description } : {}),
+    ...(input.spec.budget ? { budget: input.spec.budget } : {}),
     steps,
     ...(loops.length > 0 ? { loops } : {}),
   }

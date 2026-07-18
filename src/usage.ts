@@ -1,5 +1,105 @@
 import type { ProgressStepUsage, ProgressTokens, ProgressUsage } from "./progress"
 
+/** One cost observation recorded by the CostTracker after a phase completes. */
+export type CostEntry = {
+  phase: string
+  agent: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  inputCost: number
+  outputCost: number
+  cacheReadCost: number
+  cacheWriteCost: number
+  totalCost: number
+  durationMs: number
+  timestamp: number
+}
+
+/** Aggregated cost for a run: per-entry list plus rolled-up totals. */
+export type RunCost = {
+  entries: CostEntry[]
+  total: { inputTokens: number; outputTokens: number; totalCost: number; durationMs: number }
+  byPhase: Record<string, { totalCost: number; calls: number }>
+  byModel: Record<string, { totalCost: number; calls: number }>
+}
+
+/**
+ * Pure-function cost tracker that records per-phase cost entries and
+ * provides read-only aggregation and estimation. No side effects beyond
+ * mutating internal state.
+ */
+export class CostTracker {
+  private readonly _entries: CostEntry[] = []
+
+  /** Total USD spent so far. */
+  spent(): number {
+    return this._entries.reduce((sum, e) => sum + e.totalCost, 0)
+  }
+
+  /** Look up a phase by name. */
+  byPhase(phaseName: string): CostEntry | undefined {
+    return this._entries.find((e) => e.phase === phaseName)
+  }
+
+  /**
+   * Naive estimate for the next phase. Uses a default token estimate
+   * until calibration data is available (out of scope for MVP).
+   */
+  estimateNext(_phaseName: string, _model: string): number {
+    // MVP: constant default estimate. Calibration (EMA + persistence) is
+    // a separate feature — see PRD out-of-scope section.
+    // A more accurate version would look up historical per-agent averages.
+    return 0.001 // roughly $0.001 for 5k input + 2k output at cheap rates
+  }
+
+  /** Snapshot of all recorded data. */
+  snapshot(): RunCost {
+    const total = this._entries.reduce(
+      (acc, e) => ({
+        inputTokens: acc.inputTokens + e.inputTokens,
+        outputTokens: acc.outputTokens + e.outputTokens,
+        totalCost: acc.totalCost + e.totalCost,
+        durationMs: acc.durationMs + e.durationMs,
+      }),
+      { inputTokens: 0, outputTokens: 0, totalCost: 0, durationMs: 0 },
+    )
+
+    const byPhase: Record<string, { totalCost: number; calls: number }> = {}
+    const byModel: Record<string, { totalCost: number; calls: number }> = {}
+
+    for (const e of this._entries) {
+      if (!byPhase[e.phase]) byPhase[e.phase] = { totalCost: 0, calls: 0 }
+      byPhase[e.phase]!.totalCost += e.totalCost
+      byPhase[e.phase]!.calls++
+
+      if (!byModel[e.model]) byModel[e.model] = { totalCost: 0, calls: 0 }
+      byModel[e.model]!.totalCost += e.totalCost
+      byModel[e.model]!.calls++
+    }
+
+    return {
+      entries: [...this._entries],
+      total,
+      byPhase,
+      byModel,
+    }
+  }
+
+  /** Record one phase's cost entry. */
+  record(entry: CostEntry): void {
+    this._entries.push(entry)
+  }
+
+  /** Number of entries recorded. */
+  get size(): number {
+    return this._entries.length
+  }
+}
+
+
 /** A zeroed token tally; the canonical empty value for every accumulator. */
 export function emptyTokens(): ProgressTokens {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }

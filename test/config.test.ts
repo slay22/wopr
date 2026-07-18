@@ -576,3 +576,113 @@ describe("default config init", () => {
     expect(await readFile(join(dir, ".wopr", "agents", "implementer.md"), "utf8")).toContain("# Implementer")
   })
 })
+
+describe("budget validation", () => {
+  test("parses budget in defaults", () => {
+    const config = parse(
+      [
+        "defaults:",
+        "  budget:",
+        "    perRun: 10.00",
+        "    onExceed: warn-and-continue",
+      ].join("\n"),
+    )
+    expect(config.defaults.budget?.perRun).toBe(10.00)
+    expect(config.defaults.budget?.onExceed).toBe("warn-and-continue")
+  })
+
+  test("budget defaults to abort when onExceed is missing", () => {
+    const config = parse(
+      [
+        "defaults:",
+        "  budget:",
+        "    perRun: 5.00",
+      ].join("\n"),
+    )
+    expect(config.defaults.budget?.perRun).toBe(5.00)
+    expect(config.defaults.budget?.onExceed).toBeUndefined()
+  })
+
+  test("budget rejects non-positive perRun", () => {
+    expect(() =>
+      parse(
+        [
+          "defaults:",
+          "  budget:",
+          "    perRun: 0",
+        ].join("\n"),
+      ),
+    ).toThrow("defaults.budget.perRun must be a positive number")
+
+    expect(() =>
+      parse(
+        [
+          "defaults:",
+          "  budget:",
+          "    perRun: -1",
+        ].join("\n"),
+      ),
+    ).toThrow("defaults.budget.perRun must be a positive number")
+  })
+
+  test("budget rejects invalid onExceed", () => {
+    expect(() =>
+      parse(
+        [
+          "defaults:",
+          "  budget:",
+          "    perRun: 5",
+          "    onExceed: maybe",
+        ].join("\n"),
+      ),
+    ).toThrow('must be "abort" or "warn-and-continue"')
+  })
+
+  test("budget in pipeline overrides defaults", () => {
+    const config = parse(
+      [
+        "defaults:",
+        "  budget:",
+        "    perRun: 10.00",
+        "pipelines:",
+        "  quick:",
+        "    budget:",
+        "      perRun: 5.00",
+        "    steps:",
+        "      - implementer",
+      ].join("\n"),
+    )
+    expect(config.defaults.budget?.perRun).toBe(10)
+    expect(config.pipelines.quick?.budget?.perRun).toBe(5)
+  })
+
+  test("budget rejects perPhase with non-positive values", () => {
+    expect(() =>
+      parse(
+        [
+          "defaults:",
+          "  budget:",
+          "    perRun: 10",
+          "    perPhase:",
+          "      implementer: -1",
+        ].join("\n"),
+      ),
+    ).toThrow("must be a positive number")
+  })
+
+  test("budget round-trips through serialize + reparse", () => {
+    const config = parse(
+      [
+        "defaults:",
+        "  budget:",
+        "    perRun: 10.00",
+        "    onExceed: warn-and-continue",
+      ].join("\n"),
+    )
+    const yaml = serializeWoprConfig(config)
+    expect(yaml).toContain("perRun")
+    const reparsed = parse(yaml)
+    expect(reparsed.defaults.budget?.perRun).toBe(10)
+    expect(reparsed.defaults.budget?.onExceed).toBe("warn-and-continue")
+  })
+})
