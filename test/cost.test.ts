@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { ModelCatalog, estimateCost, isFreeModel, rateForModel } from "../src/cost"
+import { ModelCatalog, estimateCost, estimateRunCost, isFreeModel, rateForModel } from "../src/cost"
 
 const testModels = [
   {
@@ -43,6 +43,19 @@ describe("ModelCatalog", () => {
 
   test("isFree returns false for unknown models", () => {
     expect(testCatalog.isFree("unknown/model")).toBe(false)
+  })
+
+  test("isCheap returns true for models with input+output <= $2/MTok", () => {
+    // deepseek-v4-flash costs 0.14 + 0.28 = 0.42/MTok, well under $2
+    expect(testCatalog.isCheap("opencode-go/deepseek-v4-flash")).toBe(true)
+    // Free model (0 cost) is also cheap
+    expect(testCatalog.isCheap("opencode-go/free-model")).toBe(true)
+    // Expensive model (opus: 15 + 60 = 75/MTok) is not cheap
+    expect(testCatalog.isCheap("anthropic/opus-4-8")).toBe(false)
+  })
+
+  test("isCheap returns false for unknown models", () => {
+    expect(testCatalog.isCheap("unknown/model")).toBe(false)
   })
 
   test("returns empty for unknown models", () => {
@@ -99,5 +112,33 @@ describe("isFreeModel", () => {
 
   test("returns false for paid models", () => {
     expect(isFreeModel("opencode-go/deepseek-v4-flash", testCatalog)).toBe(false)
+  })
+})
+
+describe("estimateRunCost", () => {
+  test("estimates run cost for a list of steps", () => {
+    const steps = [
+      { name: "implementer", model: "opencode-go/deepseek-v4-flash" },
+      { name: "design", model: "anthropic/opus-4-8" },
+    ]
+    const tokens = { input: 1000000, output: 500000 }
+    const result = estimateRunCost(steps, tokens, testCatalog)
+    // implementer: (1M/1M)*0.14 + (500k/1M)*0.28 = 0.28
+    // design: (1M/1M)*15 + (500k/1M)*60 = 45
+    // min/max each scaled by 0.5/2.0
+    expect(result.byPhase["implementer"]).toBeDefined()
+    expect(result.byPhase["design"]).toBeDefined()
+    expect(result.min).toBeGreaterThan(0)
+    expect(result.max).toBeGreaterThan(result.min)
+    expect(result.byModel["opencode-go/deepseek-v4-flash"]).toBeDefined()
+    expect(result.byModel["anthropic/opus-4-8"]).toBeDefined()
+  })
+
+  test("estimateRunCost returns zero for free models", () => {
+    const steps = [{ name: "test", model: "opencode-go/free-model" }]
+    const tokens = { input: 5000, output: 2000 }
+    const result = estimateRunCost(steps, tokens, testCatalog)
+    expect(result.min).toBe(0)
+    expect(result.max).toBe(0)
   })
 })

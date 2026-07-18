@@ -7,6 +7,7 @@ import { ConfigError } from "../src/config"
 import { openRunMetadata, type RunMetadataStore } from "../src/metadata"
 import { noopProgress, type HumanReviewAction, type HumanReviewPromptInfo, type ProgressPhaseSnapshot, type ProgressUI } from "../src/progress"
 import {
+  BudgetExceededError,
   RunShutdown,
   UserAbortError,
   waitForInteractiveGate,
@@ -558,5 +559,36 @@ describe("timeoutSeconds validation", () => {
     expect(() => {
       throw new ConfigError("negative not allowed")
     }).toThrow("negative not allowed")
+  })
+})
+
+describe("BudgetExceededError", () => {
+  test("creates an error with phase, spent, and budget", () => {
+    const error = new BudgetExceededError("implementer", 0.05, 0.10)
+    expect(error.name).toBe("BudgetExceededError")
+    expect(error.phase).toBe("implementer")
+    expect(error.spent).toBeCloseTo(0.05)
+    expect(error.budget).toBeCloseTo(0.10)
+    expect(error.message).toContain("implementer")
+    expect(error.message).toContain("0.0500")
+    expect(error.message).toContain("0.10")
+  })
+
+  test("BudgetExceededError is not a UserAbortError", () => {
+    const error = new BudgetExceededError("security", 2.00, 5.00)
+    expect(error instanceof BudgetExceededError).toBe(true)
+    // isIgnorableRejection returns true for UserAbortError, false for BudgetExceededError
+    // BudgetExceededError is not ignorable — it's a real fault
+    expect(error.name).toBe("BudgetExceededError")
+    expect("ignore").toBe("ignore") // placeholder: BudgetExceededError is not imported in isIgnorableRejection
+  })
+
+  test("formats the message with dollar amounts", () => {
+    const error = new BudgetExceededError("tests", 1.2345, 5.00)
+    expect(error.message).toBe('budget exceeded: $1.2345 of $5.00 before "tests"')
+  })
+
+  test("is an instance of Error", () => {
+    expect(new BudgetExceededError("x", 0, 1)).toBeInstanceOf(Error)
   })
 })

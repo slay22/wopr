@@ -36,7 +36,7 @@ import {
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { AgentSpec, AgentStep, HookSet, HookSpec, LoopMeta, Pipeline, RunOptions, Step } from "./types"
-import { addTokens, emptyTokens, tokensFromValue, type CostTracker } from "./usage"
+import { addTokens, emptyTokens, tokensFromValue, CostTracker } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 import { ConfigError } from "./config"
 

@@ -7,7 +7,7 @@ import { log } from "./log"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
-import type { Pipeline, RunOptions } from "./types"
+import type { Budget, Pipeline, RunOptions } from "./types"
 import { isValidRunID } from "./workspace"
 
 /**

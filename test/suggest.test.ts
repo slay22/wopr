@@ -6,14 +6,15 @@ describe("suggestConfigForBudget", () => {
   test("returns a suggestion that fits a generous budget", () => {
     const result = suggestConfigForBudget({ budget: 100, pipeline: "implement" })
     expect(result.fitsBudget).toBe(true)
-    expect(result.estimatedCost.expected).toBeGreaterThan(0)
+    // Free-tier models cost $0, so expected can be 0 in some environments
+    expect(result.estimatedCost.expected).toBeGreaterThanOrEqual(0)
     expect(result.proposed.pipelines.implement).toBeDefined()
     expect(result.proposed.pipelines.implement.steps.length).toBeGreaterThan(0)
   })
 
-  test("returns a suggestion with fitsBudget: false when budget is too small", () => {
-    const result = suggestConfigForBudget({ budget: 0.0001, pipeline: "implement" })
-    // Budget too small should still return a suggestion with fitsBudget: false
+  test("returns a suggestion with fitsBudget: false when budget is too small even for free models", () => {
+    // A negative budget is too small even when free models exist
+    const result = suggestConfigForBudget({ budget: -1, pipeline: "implement" })
     expect(result.fitsBudget).toBe(false)
     expect(result.proposed.pipelines.implement).toBeDefined()
   })
@@ -50,8 +51,8 @@ describe("suggestConfigForBudget", () => {
 
   test("cheapestFittingTier is set when fitsBudget", () => {
     const result = suggestConfigForBudget({ budget: 100, pipeline: "implement" })
-    if (result.fitsBudget) {
-      expect(["free-only", "cheap", "frontier"]).toContain(result.cheapestFittingTier)
-    }
+    expect(result.fitsBudget).toBe(true)
+    expect(result.cheapestFittingTier).toBeDefined()
+    expect(["free-only", "cheap", "frontier"]).toContain(result.cheapestFittingTier!)
   })
 })

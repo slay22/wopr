@@ -125,6 +125,33 @@ describe("cli parsing", () => {
     }
   })
 
+  test("parses --budget flag", () => {
+    const parsed = parseArgs(["--budget", "5.00", "prompt"])
+    expect(parsed.budget).toBe("5.00")
+  })
+
+  test("--budget-mode defaults to abort", () => {
+    const parsed = parseArgs(["--budget", "5.00", "prompt"])
+    // When --budget-mode is not set, budgetMode is undefined
+    expect(parsed.budgetMode).toBeUndefined()
+  })
+
+  test("parses --budget-mode warn", () => {
+    const parsed = parseArgs(["--budget", "5.00", "--budget-mode", "warn", "prompt"])
+    expect(parsed.budgetMode).toBe("warn")
+  })
+
+  test("--no-budget clears the budget", () => {
+    const parsed = parseArgs(["--no-budget", "prompt"])
+    expect(parsed.budget).toBeUndefined()
+  })
+
+  test("rejects invalid --budget-mode", () => {
+    expect(() => parseArgs(["--budget", "5", "--budget-mode", "maybe", "prompt"])).toThrow(
+      '--budget-mode must be "abort" or "warn"',
+    )
+  })
+
   test("parses the runs subcommand", async () => {
     const bare = await parseCommand(["runs"])
     expect(bare.type).toBe("runs")

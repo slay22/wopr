@@ -12,7 +12,7 @@ export type BudgetPreferences = {
 export type BudgetSuggestion = {
   proposed: {
     defaults?: Partial<{ model: string; maxAttempts: number }>
-    agents: Record<string, Partial<{ model: string }>>
+    agents?: Record<string, Partial<{ model: string }>>
     pipelines: Record<string, { steps: { agent: string; model?: string }[] }>
   }
   estimatedCost: {
