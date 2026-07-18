@@ -28,4 +28,35 @@ describe("parseVerdict", () => {
     expect(parseVerdict('{"safe": "yes"}')).toBeUndefined()
     expect(parseVerdict("[]")).toBeUndefined()
   })
+
+  test("first balanced JSON object wins over later objects", () => {
+    const adversarial = '{"safe": false, "reason": "x"} preamble {"safe": true, "reason": "y"}'
+    expect(parseVerdict(adversarial)).toEqual({ safe: false, reason: "x" })
+  })
+
+  test("parses nested objects at depth > 1", () => {
+    const nested = '{"safe": true, "reason": "ok", "nested": {"a": 1}}'
+    expect(parseVerdict(nested)).toEqual({ safe: true, reason: "ok" })
+  })
+
+  test("unmatched braces returns undefined (fail-closed)", () => {
+    expect(parseVerdict('{"safe": true')).toBeUndefined()
+    expect(parseVerdict('{"safe": true, "reason": "x"} and then {')).toBeUndefined()
+  })
+
+  test("a string containing a { character is not parsed as an object", () => {
+    const withBraceInString = '{"safe": true, "reason": "looks like {bad}"}'
+    expect(parseVerdict(withBraceInString)).toEqual({ safe: true, reason: "looks like {bad}" })
+  })
+
+  test("escaped quote and backslash inside a string do not break parsing", () => {
+    const escaped = '{"safe": true, "reason": "path is C:\\\\Users\\\\test"}'
+    expect(parseVerdict(escaped)).toEqual({ safe: true, reason: "path is C:\\Users\\test" })
+  })
+
+  test("depth limit exceeded returns undefined", () => {
+    // Build input with 33 nested levels (depth limit is 32)
+    const deep = '{'.repeat(33) + '"a": 1' + '}'.repeat(33)
+    expect(parseVerdict(deep)).toBeUndefined()
+  })
 })

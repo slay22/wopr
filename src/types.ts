@@ -102,6 +102,8 @@ export type AgentStep = {
   readOnly?: boolean
   /** Per-step override; falls back to --max-attempts when absent. */
   maxAttempts?: number
+  /** Per-step timeout in seconds; falls back to 1800 (30 min). Must be > 0 when set. */
+  timeoutSeconds?: number
   /** Shared by every step produced from the same top-level pipeline entry; the runner batches same-groupId steps to run concurrently. */
   groupId: string
   /** Pre-fan-out logical name; equals `name` unless this step was produced by a `models:` fan-out. */

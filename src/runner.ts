@@ -38,6 +38,7 @@ import { discoverProjectContextFiles } from "./project-context"
 import type { AgentSpec, AgentStep, HookSet, HookSpec, LoopMeta, Pipeline, RunOptions, Step } from "./types"
 import { addTokens, emptyTokens, tokensFromValue } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
+import { ConfigError } from "./config"
 
 export type ActiveSession = {
   agentSession: AgentSession
@@ -761,6 +762,7 @@ type PreparedPhaseRun = {
   prompt: string
   model: ModelSelection
   maxAttempts: number
+  timeoutMs: number
 }
 
 async function preparePhaseRun(
@@ -783,9 +785,14 @@ async function preparePhaseRun(
   const attachments = [...contextFiles, ...phaseFiles, ...extraFiles]
   const prompt = buildPhasePrompt(workspace, phase)
   const model = selectedModel(phase, options.modelOverride)
+  if (phase.timeoutSeconds !== undefined && phase.timeoutSeconds <= 0) {
+    throw new ConfigError(`step "${phase.name}": timeoutSeconds must be a positive number, got ${phase.timeoutSeconds}`)
+  }
+  const timeoutSeconds = phase.timeoutSeconds ?? 1800
+  const timeoutMs = timeoutSeconds * 1000
   const maxAttempts = Math.max(1, phase.maxAttempts ?? options.maxAttempts)
 
-  return { attachments, prompt, model, maxAttempts }
+  return { attachments, prompt, model, maxAttempts, timeoutMs }
 }
 
 async function projectContextFileParts(paths: string[], targetDir: string) {
@@ -938,6 +945,7 @@ async function runPhaseAttempt(
     shutdown,
     permissions,
     sessionRef,
+    timeoutMs: prepared.timeoutMs,
   })
 
   await writeAttemptLog(workspace, phase, attempt, {
@@ -1005,6 +1013,7 @@ async function promptPhase(input: {
   shutdown: RunShutdown
   permissions: PermissionGate
   sessionRef?: SessionRef
+  timeoutMs: number
 }): Promise<SessionResult> {
   input.shutdown.throwIfRequested()
   const systemPrompt = loadAgentPrompt(basePromptName(input.phase.agentName), input.targetDir)
@@ -1033,6 +1042,15 @@ async function promptPhase(input: {
     if (chunk) input.progress.phaseMessage(input.phase.name, chunk)
   })
 
+  // Set up per-phase timeout + shutdown signal composition
+  const phaseSignal = composePhaseSignal(input.shutdown.signal, input.timeoutMs)
+  const onPhaseAbort = () => {
+    session.abort().catch(() => {})
+  }
+  if (!phaseSignal.signal.aborted) {
+    phaseSignal.signal.addEventListener("abort", onPhaseAbort, { once: true })
+  }
+
   try {
     input.shutdown.throwIfRequested()
     // pi's prompt() resolves when the run completes (no server, no SSE, so none
@@ -1041,6 +1059,10 @@ async function promptPhase(input: {
     await session.prompt(`${input.prompt}${renderAttachments(input.attachments)}`)
     await session.waitForIdle()
     input.shutdown.throwIfRequested()
+    // If the phase signal fired (timeout) but the SDK didn't reject, catch it here
+    if (phaseSignal.signal.aborted) {
+      throw phaseSignal.signal.reason ?? new Error(`phase "${input.phase.name}" timed out`)
+    }
 
     const error = session.state.errorMessage
     const usage = usageFromStats(session, sessionID, formatModel(input.model))
@@ -1050,6 +1072,10 @@ async function promptPhase(input: {
     }
     return { text: lastAssistantText(session), error, usage, sessionID, finish: error ? "error" : "stop" }
   } catch (error) {
+    if (phaseSignal.signal.aborted && !input.shutdown.aborted && !isUserAbortError(error)) {
+      // The phase timed out (not a user abort), surface the timeout error
+      throw phaseSignal.signal.reason ?? new Error(`phase "${input.phase.name}" timed out`)
+    }
     if (!input.shutdown.aborted && !isUserAbortError(error)) {
       try {
         await session.abort()
@@ -1059,6 +1085,8 @@ async function promptPhase(input: {
     }
     throw error
   } finally {
+    phaseSignal.cleanup()
+    // { once: true } auto-removes onPhaseAbort; no removeEventListener needed.
     unsubscribe()
     if (input.shutdown.aborted) await input.shutdown.abortActiveSessions(input.progress)
     input.shutdown.clearActiveSession(input.phase.name, sessionID)
@@ -1197,6 +1225,41 @@ function pickString(values: Record<string, unknown>, keys: string[]) {
 function truncate(value: string, max: number) {
   if (value.length <= max) return value
   return `${value.slice(0, max - 1)}…`
+}
+
+/**
+ * Composes a parent (shutdown) signal with a per-phase timeout into a single
+ * AbortSignal. The returned signal fires when either the parent aborts or the
+ * timeout elapses.
+ *
+ * The caller should listen for abort on the returned signal and call
+ * session.abort() to interrupt the SDK, since pi's session.prompt() does not
+ * accept an AbortSignal directly.
+ *
+ * The listener uses { once: true } so it auto-removes on fire; cleanup only
+ * needs clearTimeout.
+ */
+export function composePhaseSignal(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController()
+
+  const onParentAbort = () => controller.abort(parent?.reason)
+  if (parent) {
+    if (parent.aborted) {
+      controller.abort(parent.reason)
+    } else {
+      parent.addEventListener("abort", onParentAbort, { once: true })
+    }
+  }
+
+  const timeout = setTimeout(() => controller.abort(new Error(`phase timed out after ${timeoutMs}ms`)), timeoutMs)
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout)
+      // { once: true } auto-removes onParentAbort on fire; idempotent if never fired.
+    },
+  }
 }
 
 function buildPhasePrompt(workspace: Workspace, phase: AgentStep) {

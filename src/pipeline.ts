@@ -195,6 +195,8 @@ export type AgentStepSpec = {
   /** Fans this step out into one concurrent, forced-read-only invocation per model. Mutually exclusive with `model`. */
   models?: string[]
   maxAttempts?: number
+  /** Per-step timeout in seconds; defaults to 30 minutes. Must be > 0 when set. */
+  timeoutSeconds?: number
   /** Which previous step reports to attach: the nearest group (default), all of them, none, or an explicit list of step names. */
   reports?: "previous" | "all" | "none" | string[]
   /** Attach the cumulative diff against the base branch. Defaults to true except for the first agent step. */
@@ -624,6 +626,7 @@ function resolveAgentStepSpec(raw: string | AgentStepSpec, ctx: ResolveStepConte
       reportPath: `reports/${name}.md`,
       ...(forced || agent.readOnly ? { readOnly: true } : {}),
       ...(spec.maxAttempts !== undefined ? { maxAttempts: spec.maxAttempts } : {}),
+      ...(spec.timeoutSeconds !== undefined ? { timeoutSeconds: spec.timeoutSeconds } : {}),
     }
     return step
   })

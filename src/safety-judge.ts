@@ -94,18 +94,76 @@ function renderRequest(request: JudgeRequest): string {
 }
 
 /**
- * Pulls the verdict out of the model's reply: tolerates code fences and prose
- * around the JSON, but returns undefined (→ fail-closed) on anything it can't
- * confidently read as `{ safe, reason }`.
+ * Pulls the verdict out of the model's reply: walks the text left-to-right,
+ * balancing braces and ignoring braces inside string literals (including
+ * escaped \" and \\ inside strings). Returns the first top-level JSON object
+ * found, or undefined (→ fail-closed) if none is parseable. Includes a depth
+ * limit of 32 to defend against pathological replies.
+ *
+ * Changed from the original first-{ / last-} slice: the old parser could
+ * return the *second* object when prose or a code fence appeared before the
+ * first object, which could flip an UNSAFE verdict to SAFE.
  */
 export function parseVerdict(text: string): SafetyVerdict | undefined {
   if (!text) return undefined
-  const start = text.indexOf("{")
-  const end = text.lastIndexOf("}")
-  if (start === -1 || end <= start) return undefined
+
+  const maxDepth = 32
+  const candidates: { start: number; end: number }[] = []
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let objStart = -1
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (ch === "\\") {
+        escaped = true
+        continue
+      }
+      if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+
+    if (ch === "{") {
+      depth++
+      if (depth > maxDepth) return undefined
+      if (depth === 1) objStart = i
+      continue
+    }
+
+    if (ch === "}") {
+      if (depth === 0) continue // stray close brace, skip
+      depth--
+      if (depth === 0 && objStart !== -1) {
+        candidates.push({ start: objStart, end: i })
+        objStart = -1
+        // Return the first top-level balanced object
+        return tryParse(text.slice(candidates[0]!.start, candidates[0]!.end + 1))
+      }
+      continue
+    }
+  }
+
+  return undefined
+}
+
+function tryParse(slice: string): SafetyVerdict | undefined {
   let parsed: unknown
   try {
-    parsed = JSON.parse(text.slice(start, end + 1))
+    parsed = JSON.parse(slice)
   } catch {
     return undefined
   }
