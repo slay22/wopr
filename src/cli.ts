@@ -365,8 +365,11 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
   // Budget precedence: CLI flag > pipeline.budget > defaults.budget > none
   let budget: Budget | undefined
   if (parsed.budget !== undefined) {
-    budget = { perRun: parseFloat(parsed.budget), onExceed: parsed.budgetMode === "warn" ? "warn-and-continue" : "abort" }
-    if (!Number.isFinite(budget.perRun) || budget.perRun <= 0) throw new Error(`--budget must be a positive number, got "${parsed.budget}"`)
+    // Use Number() (not parseFloat) so trailing junk like "5.00abc" is rejected
+    // outright instead of silently truncating to 5.
+    const perRun = Number(parsed.budget)
+    if (!Number.isFinite(perRun) || perRun <= 0) throw new Error(`--budget must be a positive number, got "${parsed.budget}"`)
+    budget = { perRun, onExceed: parsed.budgetMode === "warn" ? "warn-and-continue" : "abort" }
   } else if (pipeline.budget) {
     budget = pipeline.budget
   } else if (defaults.budget) {

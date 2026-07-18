@@ -733,9 +733,29 @@ async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: Loop
       progress.message(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
       log.info(`[${loop.loopId}] iteration ${iteration}/${loop.maxIterations}`)
     }
+    // Keep the dashboard budget meter current during the loop.
+    if (options.budget && progress.updateBudget) {
+      progress.updateBudget(options.budget, currentCostTracker?.spent() ?? 0)
+    }
 
     for (const batch of loopBatches) {
       for (const step of batch as AgentStep[]) {
+        // Converge loops bypass runStandardBatch, so re-apply the budget cap here
+        // or the loop could spend without limit. Mirrors the check in runStandardBatch.
+        if (options.budget) {
+          const spent = currentCostTracker?.spent() ?? 0
+          const nextEstimate = currentCostTracker?.estimateNext(step.name, step.model) ?? 0.001
+          if (spent + nextEstimate > options.budget.perRun) {
+            if (options.budget.onExceed === "warn-and-continue") {
+              progress.message(`⚠ budget warning: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)} (${step.name} estimated $${nextEstimate.toFixed(4)})`)
+              log.warn(`[budget] $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}, continuing per onExceed=warn-and-continue`)
+            } else {
+              log.warn(`[budget] aborting before ${step.name}: $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}`)
+              progress.message(`budget exceeded: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)}`)
+              throw new BudgetExceededError(step.name, spent, options.budget.perRun)
+            }
+          }
+        }
         if (shouldSkip(step, options)) {
           progress.phaseSkipped(step.name)
           continue
