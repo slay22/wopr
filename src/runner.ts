@@ -354,7 +354,7 @@ export async function run(options: RunOptions) {
     currentCostTracker = costTracker
     // Notification dispatcher: fire-and-forget, never blocks the run.
     const notifications = new NotificationDispatcher(options.notifications)
-    if (progress.notificationsActive) progress.notificationsActive(!notifications.empty)
+    if (progress.notificationsActive) progress.notificationsActive(notifications.targets)
     if (!notifications.empty) {
       const worktreePath = options.worktree?.dir
       notifications.fire({

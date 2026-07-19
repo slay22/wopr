@@ -92,22 +92,27 @@ const testNotificationPayload: NotificationPayload = {
 }
 
 export class NotificationDispatcher {
-  private readonly targets: NotificationTarget[]
+  private readonly _targets: NotificationTarget[]
 
   constructor(targets: NotificationTarget[]) {
-    this.targets = targets
+    this._targets = targets
   }
 
   /** True when there are no targets configured — the dispatcher is a no-op. */
   get empty(): boolean {
-    return this.targets.length === 0
+    return this._targets.length === 0
+  }
+
+  /** The configured targets (read-only). */
+  get targets(): readonly NotificationTarget[] {
+    return this._targets
   }
 
   /** Fire-and-forget: never throws, never blocks the run. */
   fire(event: NotificationEvent): void {
-    if (this.targets.length === 0) return
+    if (this._targets.length === 0) return
     const payload = formatEvent(event)
-    for (const target of this.targets) {
+    for (const target of this._targets) {
       if (target.kind !== "ntfy") continue
       // Don't await; we don't want notification latency to block the run.
       sendNotification(target, payload).catch((err: Error) => {
@@ -119,7 +124,7 @@ export class NotificationDispatcher {
   /** Send a test notification to all targets. Returns per-target results. */
   async test(): Promise<Array<{ target: NotificationTarget; ok: boolean; error?: string }>> {
     return Promise.all(
-      this.targets.map(async (target) => {
+      this._targets.map(async (target) => {
         if (target.kind !== "ntfy") return { target, ok: false, error: "unsupported target kind" }
         try {
           await sendNotification(target, testNotificationPayload)

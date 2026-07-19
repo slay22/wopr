@@ -1,3 +1,4 @@
+import type { NotificationTarget } from "./notifications/types"
 import { log } from "./log"
 
 export type ProgressPhase = {
@@ -170,8 +171,8 @@ export type ProgressUI = {
   keepRunDirRequested?(): boolean
   /** Update budget tracking; budget is the cap (optional) and spent is the current total. */
   updateBudget?(budget: { perRun: number; onExceed?: "abort" | "warn-and-continue" }, spent: number): void
-  /** Report whether notifications are configured; the dashboard shows a bell icon. */
-  notificationsActive?(active: boolean): void
+  /** Report configured notification targets; the dashboard renders a bell with the topic (single) or count (multiple). */
+  notificationsActive?(targets: readonly NotificationTarget[]): void
   /** Reports the current converge-loop iteration/verdict; the dashboard renders it in the header. */
   loopState?(info: LoopProgress): void
   message(message: string): void

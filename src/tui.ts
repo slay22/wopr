@@ -13,6 +13,7 @@ import {
 } from "@opentui/core"
 
 import { log } from "./log"
+import type { NotificationTarget } from "./notifications/types"
 import { openIterateOpencodeWindow, openOpencodeSessionWindow, openStoredSessionWindow } from "./opencode"
 import { PhaseUsage, addTokens, emptyTokens } from "./usage"
 import {
@@ -258,8 +259,8 @@ export class TuiProgress implements ProgressUI {
   private budgetCap?: number
   private budgetSpent = 0
   private budgetOnExceed?: "abort" | "warn-and-continue"
-  /** Whether notifications are configured; shows a bell icon in the header. */
-  private notificationsConfigured = false
+  /** Configured notification targets; the header shows a bell with the topic (single) or count (multiple). */
+  private notificationTargets: NotificationTarget[] = []
   private readonly feed: FeedEntry[] = []
   // The live model transcript per phase (the session tab): verbatim reasoning
   // and response text, interleaved with tool/bash action markers. Streamed in
@@ -1019,8 +1020,8 @@ export class TuiProgress implements ProgressUI {
     this.budgetOnExceed = budget.onExceed
   }
 
-  notificationsActive(active: boolean): void {
-    this.notificationsConfigured = active
+  notificationsActive(targets: readonly NotificationTarget[]): void {
+    this.notificationTargets = [...targets]
     this.render()
   }
 
@@ -1616,8 +1617,12 @@ export class TuiProgress implements ProgressUI {
       ? [fg(theme.faint)("  ·  "), ...budgetBar(this.budgetSpent, this.budgetCap, Math.max(10, Math.floor(width * 0.35)))]
       : []
     title.push(...budgetChunks)
-    if (this.notificationsConfigured) {
-      title.push(fg(theme.faint)("  ·  "), bold(fg(theme.cyan))("🔔 ntfy"))
+    if (this.notificationTargets.length > 0) {
+      const label =
+        this.notificationTargets.length === 1 && this.notificationTargets[0]!.kind === "ntfy"
+          ? `🔔 ntfy: ${this.notificationTargets[0]!.topic}`
+          : `🔔 ntfy ×${this.notificationTargets.length}`
+      title.push(fg(theme.faint)("  ·  "), bold(fg(theme.cyan))(label))
     }
     const line1 = padBetween(title, totals, width)
     return this.loop ? joinLines([line1, this.convergeLine()]) : line1
