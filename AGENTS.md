@@ -573,7 +573,93 @@ The MCP server and pi extension (both separate PRDs) are thin wrappers over thes
 
 When building a transport, import from `src/core/index.ts` and wrap each function in the protocol's request/response shape. No `wopr` shell calls, no `parseAndRun`, no direct imports from `src/runner.ts`.
 
-## 15. One last thing
+## 15. MCP server (`wopr mcp`)
+
+The wopr MCP server runs as a stdio-based JSON-RPC server that wraps the core API
+for LLM-driven coding agents (Claude Code, Cursor, Codex, Continue, etc.).
+
+### Installation
+
+Add the following to your agent's MCP configuration (e.g. `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "wopr": {
+      "command": "wopr",
+      "args": ["mcp"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+### CLI usage
+
+```bash
+wopr mcp              # Start the MCP server (stdio, runs until SIGINT/SIGTERM)
+wopr mcp --version    # Print version + "MCP server ready"
+wopr mcp --list-tools # Print all 22 tool names and descriptions
+```
+
+### The 22 tools
+
+All tools are flat (no namespacing). Inputs accept JSON objects matching the tool's
+input schema. Tools return JSON-stringified results in a `text` content block.
+
+| Tool | Calls | Description |
+|---|---|---|
+| `list_pipelines` | `listPipelines()` | All available pipelines (built-in + project) |
+| `describe_pipeline` | `describePipeline(name)` | Step-by-step detail for one pipeline |
+| `list_agents` | `listAgents()` | All agents (built-in + project) |
+| `describe_agent` | `describeAgent(name)` | Detail for one agent including resolved model |
+| `list_models` | `listModels(filter?)` | Models from pi's catalog, filterable by tag/free/reasoning |
+| `describe_model` | `describeModel(modelID)` | Cost, context window, and tags for one model |
+| `get_config` | `getConfig(scope?)` | Load merged/project/global config |
+| `validate_config` | `validateConfig(yaml)` | Validate YAML against the config schema |
+| `diff_config` | `diffConfig(scope, yaml)` | Show what would change without writing |
+| `set_config` | `setConfig(scope, yaml, ...)` | Write config; `validateOnly: true` for dry-run |
+| `preview_run` | `previewRun(input)` | Complete run preview without creating a workspace |
+| `estimate_cost` | `estimateCost(input)` | Pure cost projection for a pipeline |
+| `suggest_config_for_budget` | `suggestConfigForBudget({...})` | Proposes a config that fits a budget |
+| `start_run` | `startRun(input)` | Start a run; returns `runId` immediately |
+| `get_run_status` | `getRunStatus(runId)` | Poll in-flight or finished run status |
+| `list_runs` | `listRuns(filter?)` | List past runs |
+| `get_run_report` | `getRunReport(runId, phase)` | Read a phase report (markdown + findings) |
+| `get_run_cost` | `getRunCost(runId)` | Cost breakdown by phase and model |
+| `get_run_diff` | `getRunDiff(runId)` | File-level diff summary |
+| `get_run_commits` | `getRunCommits(runId)` | Commit list with phase annotations |
+| `cancel_run` | `cancelRun(runId, reason?)` | Abort an in-flight run |
+| `resume_run` | `resumeRun(runId)` | Resume an incomplete run |
+
+### Error codes
+
+| Code | Meaning | Description |
+|---|---|---|
+| `-32001` | `config_error` | Invalid wopr configuration |
+| `-32002` | `run_not_found` | Requested run ID does not exist |
+| `-32003` | `validation_error` | Input failed validation |
+| `-32004` | `aborted` | Operation was aborted |
+| `-32005` | `budget_exceeded` | Run exceeded its budget cap |
+| `-32603` | `internal_error` | Unexpected server error |
+
+### Worked example (Claude Code)
+
+User configures `.mcp.json` as above and types:
+> *"Use wopr to add a dark mode toggle. I have $2 to spend."*
+
+The agent calls (programmatically):
+
+1. `list_pipelines` to discover available pipelines
+2. `suggest_config_for_budget` with budget=$2, pipeline=implement
+3. `preview_run` with the suggested config
+4. Narrates the plan to the user
+5. `start_run` to begin execution
+6. `get_run_status` (polling loop) to track progress
+7. `get_run_report` to read the adversarial validator's verdict
+8. `get_run_cost` to confirm the total stayed under budget
+
+## 16. One last thing
 
 WOPR is a **draft generator**, not a final-answer machine. Every output needs human review before it ships to a real codebase. The pipeline's job is to do the 80% — the boring implementation, the standard patterns, the obvious tests — so the human can spend their attention on the 20% that matters: is the architecture right, are the tradeoffs the right ones, does this actually solve the user's problem.
 

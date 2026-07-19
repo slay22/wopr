@@ -69,6 +69,10 @@ export class ConfigError extends Error {
     super(message)
     this.name = "ConfigError"
   }
+
+  toJSON(): Record<string, unknown> {
+    return { name: this.name, message: this.message }
+  }
 }
 
 const configFileNames = ["config.yaml", "config.yml"]

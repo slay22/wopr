@@ -25,9 +25,28 @@
   `cancelRun` and `getRunStatus` to find in-flight runs by ID.
 - **AGENTS.md §14** documents the full core API contract for transport PRDs.
 
+### Added: MCP server (`src/mcp/`)
+
+- **New module `src/mcp/`.** A stdio-based MCP (Model Context Protocol) server
+  exposing the 22 core API functions as tools. The server speaks JSON-RPC 2.0
+  over stdio — the universal transport for LLM-driven coding agents.
+- **22 MCP tools.** Every core API function is exposed as a flat, snake_case
+  tool with a hand-written JSON Schema for its input. See AGENTS.md §15 for
+  the full list.
+- **`wopr mcp` subcommand.** Start the MCP server with `wopr mcp`, inspect
+  available tools with `wopr mcp --list-tools`, check the version with
+  `wopr mcp --version`.
+- **Error serialization.** `serializeError()` maps WOPR error classes to MCP
+  error codes (`-32001` through `-32005` plus `-32603` for unknown errors).
+- **`toJSON()` on all error classes.** `ConfigError`, `RunNotFoundError`,
+  `ValidationError`, `AbortError`, and `BudgetExceededError` now have `toJSON()`
+  methods so they serialize cleanly over JSON-RPC.
+- **New dependency.** `@modelcontextprotocol/sdk` (MIT) — the official MCP SDK.
+- **Test coverage.** 20 new tests covering the server setup, tools/list response,
+  individual tool calls, error handling, and start/cancel lifecycle.
+
 ### Next up (separate PRDs)
 
-- **MCP server** — JSON-RPC transport over the core API
 - **pi extension** — `@earendil-works/wopr-for-pi` factory
 
 ### Added: Budgets (MVP)

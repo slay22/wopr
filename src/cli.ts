@@ -65,6 +65,7 @@ export type CliCommand =
   | { type: "worktrees"; action: "list" | "prune"; force: boolean }
   | { type: "config"; targetDir: string }
   | { type: "init"; options: InitOptions }
+  | { type: "mcp"; argv: string[] }
 
 export async function parseAndRun(argv: string[]) {
   if (argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
@@ -97,6 +98,11 @@ export async function parseAndRun(argv: string[]) {
       const scope = command.options.global ? "global config" : "project config"
       process.stdout.write(`${result.created ? "created" : "ensured"} ${scope}: ${result.path}\n`)
     }
+    return
+  }
+  if (command.type === "mcp") {
+    const { handleMcpSubcommand } = await import("./mcp")
+    await handleMcpSubcommand(command.argv)
     return
   }
 
@@ -231,6 +237,9 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
     const parsed = parseInitArgs(argv.slice(1))
     if (parsed.help) return { type: "help", text: initHelp() }
     return { type: "init", options: parsed }
+  }
+  if (argv[0] === "mcp") {
+    return { type: "mcp", argv }
   }
 
   const parsed = parseArgs(argv)
@@ -599,6 +608,7 @@ Commands:
   init --global            Create ~/.wopr/config.yaml and ~/.wopr/agents/*.md
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.wopr/runs)
+  mcp                      Start the MCP server (stdio), or use --list-tools / --version
   worktrees [list|prune]   List the isolated worktrees --worktree created (under ~/.wopr/worktrees),
                            or prune their checkouts (branches are kept; --force removes dirty ones)
   config                   View and edit the global (~/.wopr) and current project config in a TUI
