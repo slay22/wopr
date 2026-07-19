@@ -18,7 +18,7 @@ export const runsHandlers: Record<string, ToolHandler> = {
   start_run: async (args) => {
     const input = args as unknown as RunInput
     if (!input.prompt) throw new Error("prompt is required")
-    if (!input.pipeline) throw new Error("pipeline is required")
+    if (!input.pipeline && !input.steps) throw new Error("pipeline or steps is required")
     if (!input.targetDir) throw new Error("targetDir is required")
 
     const handle = startRun(input)
@@ -97,10 +97,24 @@ export const runsToolDefs = [
       "Start a wopr run. Returns a runId immediately. Poll get_run_status for progress.",
     inputSchema: {
       type: "object" as const,
-      required: ["prompt", "pipeline", "targetDir"],
+      required: ["prompt", "targetDir"],
       properties: {
         prompt: { type: "string", description: "The PRD or task description." },
-        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine')." },
+        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine'). Ignored when steps is set." },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              agent: { type: "string", description: "Agent name (e.g. 'implementer', 'test-engineer')." },
+              name: { type: "string", description: "Optional step name." },
+              model: { type: "string", description: "Optional model override for this step." },
+            },
+            required: ["agent"],
+            additionalProperties: true,
+          },
+          description: "Custom steps array for a dynamic pipeline. Takes precedence over pipeline.",
+        },
         targetDir: { type: "string", description: "Absolute path to the target project." },
         baseRef: { type: "string", description: "Branch/ref for diff calculation. Defaults to auto-detected." },
         worktree: {

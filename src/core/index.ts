@@ -28,7 +28,13 @@ export type {
   RunCommitInfo,
   ConfigScope,
   ConfigFormat,
+  PipelineRecommendation,
+  RecommendPipelineInput,
 } from "./types"
+
+/** Convenience re-export of StepSpec from pipeline.ts for dynamic pipeline composition. */
+export type { StepSpec } from "../pipeline"
+export type { AgentStepSpec, HumanStepSpec, ParallelStepSpec, LoopStepSpec } from "../pipeline"
 
 // Discovery — what's available
 export {
@@ -64,6 +70,9 @@ export {
   suggestConfigForBudget,
 } from "./planning"
 export type { BudgetSuggestion } from "./planning"
+
+// Recommendation — what pipeline to run
+export { recommendPipeline } from "./recommend"
 
 // Runs — execute and observe
 export {

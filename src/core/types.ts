@@ -1,4 +1,5 @@
 import type { Budget } from "../types"
+import type { StepSpec } from "../pipeline"
 
 /** Structured finding from a phase review, closable by the MCP server. */
 export type Finding = {
@@ -16,9 +17,11 @@ export type Finding = {
 /** Input for previewRun and startRun. Mirrors RunOptions with optional-friendly defaults. */
 export type RunInput = {
   prompt: string
-  pipeline: string
+  pipeline?: string
   targetDir: string
   baseRef?: string
+  /** When set, takes precedence over pipeline. Composed from registered agents. */
+  steps?: StepSpec[]
   budget?: Budget
   files?: string[]
   modelOverride?: string
@@ -35,6 +38,23 @@ export type RunInput = {
   initRepo?: boolean
   /** Resume from a previous run's workspace. */
   resumeRunID?: string
+}
+
+/** Result of recommendPipeline: a named pipeline or a custom steps array. */
+export type PipelineRecommendation =
+  | { kind: "named"; pipeline: string; reason: string }
+  | { kind: "custom"; steps: StepSpec[]; reason: string }
+
+/** Input for recommendPipeline. */
+export type RecommendPipelineInput = {
+  prompt: string
+  targetDir?: string
+  preferences?: {
+    changeExisting?: boolean
+    rigor?: "low" | "standard" | "high"
+    budget?: "low" | "medium" | "any"
+    readOnly?: boolean
+  }
 }
 
 /** RunPreview: what would happen without actually doing it. */

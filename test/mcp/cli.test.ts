@@ -40,7 +40,7 @@ describe("handleMcpSubcommand", () => {
     }
   })
 
-  test("--list-tools prints all 22 tool names and descriptions", async () => {
+  test("--list-tools prints all 23 tool names and descriptions", async () => {
     const chunks: string[] = []
     const origWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((chunk: any) => {
@@ -75,10 +75,11 @@ describe("handleMcpSubcommand", () => {
       expect(output).toContain("get_run_commits")
       expect(output).toContain("cancel_run")
       expect(output).toContain("resume_run")
+      expect(output).toContain("recommend_pipeline")
 
       // Each tool should have a description (indented on the next line)
       const lines = output.split("\n").filter((l) => l.trim().length > 0)
-      expect(lines.length).toBeGreaterThanOrEqual(22)
+      expect(lines.length).toBeGreaterThanOrEqual(23)
     } finally {
       process.stdout.write = origWrite
     }
@@ -98,8 +99,8 @@ describe("handleMcpSubcommand", () => {
       const lines = output.split("\n")
 
       // Every tool name line should be followed by an indented description
-      const toolLines = lines.filter((l) => l.startsWith("list_") || l.startsWith("describe_") || l.startsWith("get_") || l.startsWith("set_") || l.startsWith("diff_") || l.startsWith("validate_") || l.startsWith("preview_") || l.startsWith("estimate_") || l.startsWith("suggest_") || l.startsWith("start_") || l.startsWith("cancel_") || l.startsWith("resume_"))
-      expect(toolLines.length).toBe(22)
+      const toolLines = lines.filter((l) => l.startsWith("list_") || l.startsWith("describe_") || l.startsWith("get_") || l.startsWith("set_") || l.startsWith("diff_") || l.startsWith("validate_") || l.startsWith("preview_") || l.startsWith("estimate_") || l.startsWith("suggest_") || l.startsWith("start_") || l.startsWith("cancel_") || l.startsWith("resume_") || l.startsWith("recommend_"))
+      expect(toolLines.length).toBe(23)
 
       // Each tool should have an indented description line
       for (const line of toolLines) {

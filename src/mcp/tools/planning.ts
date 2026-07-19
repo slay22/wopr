@@ -1,14 +1,20 @@
-import { previewRun, estimateCost, suggestConfigForBudget } from "../../core"
-import type { RunInput } from "../../core/types"
+import { previewRun, estimateCost, suggestConfigForBudget, recommendPipeline } from "../../core"
+import type { RunInput, RecommendPipelineInput } from "../../core/types"
 import type { ToolHandler } from "./index"
 
 // ─── Tool handlers ──────────────────────────────────────────────────────────
 
 export const planningHandlers: Record<string, ToolHandler> = {
+  recommend_pipeline: async (args) => {
+    const input = args as unknown as RecommendPipelineInput
+    if (!input.prompt) throw new Error("prompt is required")
+    return recommendPipeline(input)
+  },
+
   preview_run: async (args) => {
     const input = args as unknown as RunInput
     if (!input.prompt) throw new Error("prompt is required")
-    if (!input.pipeline) throw new Error("pipeline is required")
+    if (!input.pipeline && !input.steps) throw new Error("pipeline or steps is required")
     if (!input.targetDir) throw new Error("targetDir is required")
     return previewRun(input)
   },
@@ -16,7 +22,7 @@ export const planningHandlers: Record<string, ToolHandler> = {
   estimate_cost: async (args) => {
     const input = args as unknown as RunInput
     if (!input.prompt) throw new Error("prompt is required")
-    if (!input.pipeline) throw new Error("pipeline is required")
+    if (!input.pipeline && !input.steps) throw new Error("pipeline or steps is required")
     if (!input.targetDir) throw new Error("targetDir is required")
     return estimateCost(input)
   },
@@ -38,15 +44,52 @@ export const planningHandlers: Record<string, ToolHandler> = {
 
 export const planningToolDefs = [
   {
+    name: "recommend_pipeline",
+    description:
+      "Given a prompt and optional preferences, recommends a named pipeline or a custom steps array. Pure heuristic, no LLM cost.",
+    inputSchema: {
+      type: "object" as const,
+      required: ["prompt"],
+      properties: {
+        prompt: { type: "string", description: "The PRD or task description (first 200-500 chars are enough)." },
+        targetDir: { type: "string", description: "Absolute path to the target project (optional)." },
+        preferences: {
+          type: "object",
+          properties: {
+            changeExisting: { type: "boolean", description: "When true, prefer refine/review over implement." },
+            rigor: { type: "string", enum: ["low", "standard", "high"], description: "Rigor level." },
+            budget: { type: "string", enum: ["low", "medium", "any"], description: "Budget preference." },
+            readOnly: { type: "boolean", description: "When true, prefer read-only review." },
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "preview_run",
     description:
       "Complete run preview without creating a workspace. Returns the run ID, step details, cost estimate, and warnings.",
     inputSchema: {
       type: "object" as const,
-      required: ["prompt", "pipeline", "targetDir"],
+      required: ["prompt", "targetDir"],
       properties: {
         prompt: { type: "string", description: "The PRD or task description." },
-        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine')." },
+        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine'). Ignored when steps is set." },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              agent: { type: "string" },
+              name: { type: "string" },
+              model: { type: "string" },
+            },
+            required: ["agent"],
+            additionalProperties: true,
+          },
+          description: "Custom steps array. Takes precedence over pipeline.",
+        },
         targetDir: { type: "string", description: "Absolute path to the target project." },
         baseRef: { type: "string", description: "Branch/ref for diff calculation. Defaults to auto-detected." },
         budget: {
@@ -70,10 +113,24 @@ export const planningToolDefs = [
     description: "Pure cost projection for a pipeline. Returns min/max/expected cost by phase and model.",
     inputSchema: {
       type: "object" as const,
-      required: ["prompt", "pipeline", "targetDir"],
+      required: ["prompt", "targetDir"],
       properties: {
         prompt: { type: "string", description: "The PRD or task description." },
-        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine')." },
+        pipeline: { type: "string", description: "Pipeline name (e.g. 'implement', 'refine'). Ignored when steps is set." },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              agent: { type: "string" },
+              name: { type: "string" },
+              model: { type: "string" },
+            },
+            required: ["agent"],
+            additionalProperties: true,
+          },
+          description: "Custom steps array. Takes precedence over pipeline.",
+        },
         targetDir: { type: "string", description: "Absolute path to the target project." },
       },
       additionalProperties: false,

@@ -258,6 +258,9 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
       { agent: "adversarial", model: defaultImplementReviewModel, reports: "all" },
     ],
   },
+  // DEPRECATED: `*-lite` pipelines are pre-baked budget presets. With Budgets in main,
+  // prefer `implement` + `suggestConfigForBudget({ budget, tier: "free-only" })`.
+  // These stay for back-compat; remove in v0.3.
   "implement-lite": {
     description: "Like implement, but swaps GPT 5.6 Terra xhigh phases for GLM 5.2 to reduce cost",
     steps: [
@@ -284,6 +287,9 @@ export const builtInPipelines: Record<string, PipelineSpec> = {
       { agent: "review-report", name: "report", model: defaultOpusModel, reports: "all" },
     ],
   },
+  // DEPRECATED: `*-lite` pipelines are pre-baked budget presets. With Budgets in main,
+  // prefer `review` + `suggestConfigForBudget({ budget, tier: "free-only" })`.
+  // These stay for back-compat; remove in v0.3.
   "review-lite": {
     description:
       "Like review, but swaps GPT 5.6 Terra xhigh for GLM 5.2 in scope and the audit fan-out; the report and the parallel audit slot keep Opus.",

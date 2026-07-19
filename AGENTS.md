@@ -68,13 +68,14 @@ Pick the smallest pipeline that does the job. More phases = more time, more cost
 | If you want to… | Pipeline | Notes |
 |---|---|---|
 | Add a feature or implement a spec | `implement` | 6 phases: implementer, patterns, security, design, tests, adversarial |
-| Same as above, but cost-sensitive | `implement-lite` | Swaps the high-end model on the heavy phases for a cheaper one |
+| Same as above, but cost-sensitive | `implement-lite` _(deprecated)_ | Swaps to cheaper models. Prefer `implement` + `suggestConfigForBudget({ tier: "free-only" })`. |
 | Audit a branch without changing code | `review` | Read-only. Output: `reports/report.md` |
-| Same, but cost-sensitive | `review-lite` | |
+| Same, but cost-sensitive | `review-lite` _(deprecated)_ | Prefer `review` + `suggestConfigForBudget({ tier: "free-only" })`. |
 | Audit **and apply accepted fixes** | `refine` | 7 phases: scope, bugs, clean-code, security, triage, fixes, validator |
 | Same, but every audit runs on two models in parallel | `ultra-refine` | |
 | Implement + multi-model review of initial diff + final audit | `ultra-implement` | Heaviest; for risky changes |
 | Self-correcting: re-plan from validator findings until PASS or cap | `converge` | The headline "closes the loop" mode. Most expensive. |
+| Pick your own steps | **dynamic custom pipeline** | Pass a `steps` array or use `--steps` CLI flag. See §17. |
 
 **Decision rules:**
 
@@ -731,7 +732,80 @@ See [`docs/mcp-installation.md`](./docs/mcp-installation.md) for ready-to-use
 `.mcp.json` / `.cursor/mcp.json` / Codex `config.toml` snippets for
 Claude Code, Cursor, and Codex.
 
-## 16. One last thing
+## 17. Composing pipelines dynamically
+
+Instead of picking a named pipeline, you can pass a custom `steps` array.
+The agent (or the spec) decides which steps to run, in what order. WOPR
+still wraps the steps in a `Plan`-shaped `Pipeline` internally (with the
+per-phase commit, diff, and report machinery), so the experience is
+identical — just without the constraint of the 8 built-in shapes.
+
+```typescript
+// MCP / Claude Code example
+import { recommendPipeline, startRun } from "./src/core"
+
+const rec = await recommendPipeline({
+  prompt: "fix the typo in src/foo.ts",
+  preferences: { rigor: "low" },
+})
+// → { kind: "custom", steps: [{ agent: "implementer" }, { agent: "test-engineer" }], reason: "..." }
+
+// Start a run with custom steps
+const handle = startRun({
+  prompt: "fix the typo in src/foo.ts",
+  targetDir: "/Users/me/myapp",
+  steps: rec.kind === "custom" ? rec.steps : undefined,
+  budget: { perRun: 0.50 },
+})
+```
+
+### Via CLI
+
+```bash
+wopr --steps "implementer,tests" --prompt-file prd.md
+wopr --steps "security-auditor,review-fixer,review-validator" "Fix things"
+```
+
+Comma-separated agent names resolve to `{ agent: <name> }` steps. The `--steps`
+flag is mutually exclusive with `--pipeline`.
+
+### Via MCP `start_run`
+
+The `start_run` tool accepts a `steps` array directly. When `steps` is set,
+`pipeline` is ignored.
+
+```json
+{
+  "prompt": "fix the typo in src/foo.ts",
+  "targetDir": "/Users/me/myapp",
+  "steps": [
+    { "agent": "implementer" },
+    { "agent": "test-engineer" }
+  ]
+}
+```
+
+### Via `recommend_pipeline` (MCP tool)
+
+The `recommend_pipeline` MCP tool (and its core function counterpart) uses a
+keyword-based heuristic to recommend either a named pipeline or a custom steps
+array. No LLM cost — pure string matching + preference logic.
+
+### Step names
+
+Step names correspond to agent names from the registry (`list_agents`). Each
+step can also specify an optional `model` override and an optional `name`.
+
+### Deprecation of `*-lite`
+
+The `*-lite` pipelines (`implement-lite`, `review-lite`) are pre-baked budget
+presets. With Budgets (`--budget`, `suggestConfigForBudget`) in main, these are
+redundant — use `implement` or `review` with `suggestConfigForBudget({ budget,
+tier: "free-only" })` instead. They stay for back-compat; removed in v0.3.
+
+---
+
+## 18. One last thing
 
 WOPR is a **draft generator**, not a final-answer machine. Every output needs human review before it ships to a real codebase. The pipeline's job is to do the 80% — the boring implementation, the standard patterns, the obvious tests — so the human can spend their attention on the 20% that matters: is the architecture right, are the tradeoffs the right ones, does this actually solve the user's problem.
 
