@@ -754,18 +754,29 @@ per-phase commit, diff, and report machinery), so the experience is
 identical — just without the constraint of the 8 built-in shapes.
 
 ```typescript
-// MCP / Claude Code example
+// MCP / Claude Code example — recommend a pipeline, then run exactly those steps.
+// recommendPipeline returns `custom` steps for high-rigor audit/security contexts:
 import { recommendPipeline, startRun } from "./src/core"
 
 const rec = await recommendPipeline({
-  prompt: "fix the typo in src/foo.ts",
-  preferences: { rigor: "low" },
+  prompt: "check the auth module for security issues",
+  preferences: { readOnly: true, rigor: "high" },
 })
-// → { kind: "custom", steps: [{ agent: "implementer" }, { agent: "test-engineer" }], reason: "..." }
+// → {
+//     kind: "custom",
+//     reason: "read-only review with high rigor: custom audit pipeline",
+//     steps: [
+//       { agent: "review-scope" },
+//       { agent: "security-reviewer" },
+//       { agent: "adversarial-reviewer" },
+//       { agent: "review-report" },
+//     ],
+//   }
 
-// Start a run with custom steps
+// Start a run with those exact steps. For a trivial fix you'd usually skip
+// recommendPipeline and pass a minimal `steps` array directly:
 const handle = startRun({
-  prompt: "fix the typo in src/foo.ts",
+  prompt: "check the auth module for security issues",
   targetDir: "/Users/me/myapp",
   steps: rec.kind === "custom" ? rec.steps : undefined,
   budget: { perRun: 0.50 },
