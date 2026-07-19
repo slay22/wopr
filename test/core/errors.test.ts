@@ -33,6 +33,16 @@ describe("RunNotFoundError", () => {
     expect(error.message).toContain("json-test")
     expect(error.runId).toBe("json-test")
   })
+
+  test("toJSON returns the expected shape", () => {
+    const error = new RunNotFoundError("run-to-json")
+    const json = error.toJSON()
+    expect(json).toEqual({
+      name: "RunNotFoundError",
+      message: error.message,
+      runId: "run-to-json",
+    })
+  })
 })
 
 describe("ValidationError", () => {
@@ -66,6 +76,16 @@ describe("ValidationError", () => {
     expect(error.name).toBe("ValidationError")
     expect(error.errors).toEqual(["err1", "err2"])
   })
+
+  test("toJSON returns the expected shape", () => {
+    const error = new ValidationError(["err-a", "err-b"])
+    const json = error.toJSON()
+    expect(json).toEqual({
+      name: "ValidationError",
+      message: error.message,
+      errors: ["err-a", "err-b"],
+    })
+  })
 })
 
 describe("AbortError", () => {
@@ -81,10 +101,26 @@ describe("AbortError", () => {
     expect(error).toBeInstanceOf(Error)
   })
 
+  test("preserves the reason", () => {
+    const error = new AbortError("some reason")
+    expect(error.reason).toBe("some reason")
+  })
+
   test("properties are directly accessible", () => {
     const error = new AbortError("some reason")
     expect(error.name).toBe("AbortError")
     expect(error.message).toContain("some reason")
+    expect(error.reason).toBe("some reason")
+  })
+
+  test("toJSON returns the expected shape", () => {
+    const error = new AbortError("test abort reason")
+    const json = error.toJSON()
+    expect(json).toEqual({
+      name: "AbortError",
+      message: error.message,
+      reason: "test abort reason",
+    })
   })
 })
 
@@ -98,6 +134,22 @@ describe("ConfigError (re-exported)", () => {
     expect(error).toBeInstanceOf(Error)
     expect(error.name).toBe("ConfigError")
     expect(error.message).toContain("invalid configuration")
+  })
+
+  test("toJSON returns the expected shape", () => {
+    const error = new ConfigError("bad config")
+    const json = error.toJSON()
+    expect(json).toEqual({
+      name: "ConfigError",
+      message: "bad config",
+    })
+  })
+
+  test("JSON.stringify outputs toJSON shape correctly", () => {
+    const error = new ConfigError("serialize me")
+    const parsed = JSON.parse(JSON.stringify(error))
+    expect(parsed.name).toBe("ConfigError")
+    expect(parsed.message).toContain("serialize me")
   })
 })
 
@@ -123,5 +175,26 @@ describe("BudgetExceededError (re-exported)", () => {
     expect(error.phase).toBe("security")
     expect(error.spent).toBe(1.23)
     expect(error.budget).toBe(5.00)
+  })
+
+  test("toJSON returns the expected shape", () => {
+    const error = new BudgetExceededError("tests", 1.5, 3.0)
+    const json = error.toJSON()
+    expect(json).toEqual({
+      name: "BudgetExceededError",
+      message: error.message,
+      phase: "tests",
+      spent: 1.5,
+      budget: 3.0,
+    })
+  })
+
+  test("JSON.stringify encodes all fields via toJSON", () => {
+    const error = new BudgetExceededError("implementer", 0.42, 5.00)
+    const parsed = JSON.parse(JSON.stringify(error))
+    expect(parsed.name).toBe("BudgetExceededError")
+    expect(parsed.phase).toBe("implementer")
+    expect(parsed.spent).toBe(0.42)
+    expect(parsed.budget).toBe(5.0)
   })
 })

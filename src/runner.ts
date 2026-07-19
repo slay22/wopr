@@ -58,6 +58,10 @@ export class BudgetExceededError extends Error {
     this.spent = spent
     this.budget = budget
   }
+
+  toJSON(): Record<string, unknown> {
+    return { name: this.name, message: this.message, phase: this.phase, spent: this.spent, budget: this.budget }
+  }
 }
 
 export class UserAbortError extends Error {
