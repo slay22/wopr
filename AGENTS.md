@@ -506,7 +506,7 @@ ntfy://<user>:<pass>@<server>/<topic>      # self-hosted with auth
 | `run_started` | Run starts | default |
 | `phase_done` | Phase completes successfully | default |
 | `phase_failed` | Phase fails after all attempts | high |
-| `verdict_received` | Adversarial validator renders a verdict | pass=default, fail=high |
+| `verdict_received` | *(not yet wired — see Limitations)* Adversarial validator renders a verdict | pass=default, fail=high |
 | `budget_warning` | Run exceeds budget cap (warn mode) | high |
 | `budget_exceeded` | Budget cap hit (abort mode) | urgent |
 | `run_completed` | Pipeline completes successfully | high |
@@ -538,6 +538,10 @@ Project config overrides global config (they don't merge). Use `--no-notify` to 
 - No notification templates / customization
 - No per-agent filtering — every event fires to every target
 - No bidirectional click actions on the ntfy side
+- **`verdict_received` is not yet wired** in this MVP. The dispatcher has the
+  formatter and tests, but the runner does not currently parse the validator
+  report to extract the verdict, so no validator notification is sent yet.
+  Tracked as a follow-up; all other events fire as listed above.
 
 ## 15. Core API (`src/core/index.ts`)
 

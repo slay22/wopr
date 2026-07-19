@@ -759,7 +759,7 @@ async function runPhase(
         type: "phase_failed",
         runId: workspace.runID,
         phase: phase.name,
-        attempts: 1,
+        attempts: prepared.maxAttempts,
         error: formatSdkError(error),
       })
     }
