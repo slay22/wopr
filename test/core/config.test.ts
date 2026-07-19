@@ -95,6 +95,7 @@ describe("serializeWoprConfig", () => {
       permissions: { allow: [] as string[], deny: [] as string[] },
       hooks: { pre: [] as unknown[], post: [] as unknown[], pipelines: {} as Record<string, unknown> },
       attachments: [] as string[],
+      notifications: [] as unknown[],
     }
     const serialized = serializeWoprConfig(config as any)
     expect(typeof serialized).toBe("string")

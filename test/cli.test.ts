@@ -153,6 +153,31 @@ describe("cli parsing", () => {
     )
   })
 
+  test("parses --notify flag", () => {
+    const parsed = parseArgs(["--notify", "ntfy://wopr-leo", "prompt"])
+    expect(parsed.notify).toEqual(["ntfy://wopr-leo"])
+  })
+
+  test("--notify is repeatable", () => {
+    const parsed = parseArgs(["--notify", "ntfy://topic-a", "--notify", "ntfy://topic-b", "prompt"])
+    expect(parsed.notify).toEqual(["ntfy://topic-a", "ntfy://topic-b"])
+  })
+
+  test("--no-notify clears notifications", () => {
+    const parsed = parseArgs(["--notify", "ntfy://wopr-leo", "--no-notify", "prompt"])
+    expect(parsed.notify).toEqual([])
+    expect(parsed.noNotify).toBe(true)
+  })
+
+  test("parses the notify test subcommand", async () => {
+    const cmd = await parseCommand(["notify", "test", "ntfy://wopr-test"])
+    expect(cmd.type).toBe("notify-test")
+    if (cmd.type === "notify-test") {
+      expect(cmd.urls).toEqual(["ntfy://wopr-test"])
+      expect(cmd.targets.length).toBe(1)
+    }
+  })
+
   test("parses the runs subcommand", async () => {
     const bare = await parseCommand(["runs"])
     expect(bare.type).toBe("runs")
@@ -260,6 +285,59 @@ describe("config precedence", () => {
     const options = await resolveRunOptions(parsed)
     expect(options.budget?.perRun).toBe(10)
     expect(options.budget?.onExceed).toBe("warn-and-continue")
+  })
+
+  describe("notification config resolution", () => {
+    async function projectWithNotifyConfig() {
+      const dir = await mkdtemp(join(tmpdir(), "wopr-cli-notify-"))
+      dirs.push(dir)
+      await mkdir(join(dir, ".wopr"), { recursive: true })
+      await writeFile(join(dir, ".wopr", "config.yaml"), [
+        "notifications:",
+        "  - ntfy://config-topic",
+      ].join("\n"))
+      return dir
+    }
+
+    test("config notification targets appear in resolved options", async () => {
+      const dir = await projectWithNotifyConfig()
+      const parsed = parseArgs(["prompt"])
+      parsed.targetDir = dir
+      const options = await resolveRunOptions(parsed)
+      expect(options.notifications.length).toBe(1)
+      if (options.notifications[0]!.kind === "ntfy") {
+        expect(options.notifications[0]!.topic).toBe("config-topic")
+      }
+    })
+
+    test("--notify CLI flag overrides config notifications", async () => {
+      const dir = await projectWithNotifyConfig()
+      const parsed = parseArgs(["--notify", "ntfy://cli-topic", "prompt"])
+      parsed.targetDir = dir
+      const options = await resolveRunOptions(parsed)
+      expect(options.notifications.length).toBe(1)
+      if (options.notifications[0]!.kind === "ntfy") {
+        expect(options.notifications[0]!.topic).toBe("cli-topic")
+      }
+    })
+
+    test("--no-notify clears all notification targets", async () => {
+      const dir = await projectWithNotifyConfig()
+      const parsed = parseArgs(["--no-notify", "prompt"])
+      parsed.targetDir = dir
+      const options = await resolveRunOptions(parsed)
+      expect(options.notifications).toEqual([])
+    })
+
+    test("no config and no --notify means empty notifications", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "wopr-cli-no-notify-"))
+      dirs.push(dir)
+      await mkdir(join(dir, ".wopr"), { recursive: true })
+      const parsed = parseArgs(["prompt"])
+      parsed.targetDir = dir
+      const options = await resolveRunOptions(parsed)
+      expect(options.notifications).toEqual([])
+    })
   })
 
   test("CLI flags always win over config defaults", async () => {

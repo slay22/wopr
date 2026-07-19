@@ -726,6 +726,7 @@ async function runPhase(
 ) {
   progress.phaseStarted(phase.name, phase.description)
   log.section(`${phase.name} - ${phase.description}`)
+  const phaseStartTime = Date.now()
 
   try {
     const prepared = await preparePhaseRun(workspace, phase, options, extraFiles, projectContextFiles)
@@ -744,7 +745,7 @@ async function runPhase(
         type: "phase_done",
         runId: workspace.runID,
         phase: phase.name,
-        durationMs: Date.now() - (Date.now() - 1), // placeholder; real duration comes from usage
+        durationMs: Date.now() - phaseStartTime,
         model,
         tokens,
         cost,

@@ -104,4 +104,127 @@ describe("NotificationDispatcher", () => {
     dispatcher.fire(event)
     expect(fetchCalls.length).toBe(1)
   })
+
+  test("phase_done event fires with correct headers", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "phase_done",
+      runId: "run-123",
+      phase: "implementer",
+      durationMs: 120000,
+      model: "openai/gpt-4",
+      tokens: 15000,
+      cost: 0.05,
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    expect(headers["X-Tags"]).toBe("white_check_mark,wopr")
+    // phase_done uses default priority, so no Priority header
+    expect(headers["Priority"]).toBeUndefined()
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("implementer done")
+    expect(body).toContain("2m")
+  })
+
+  test("verdict_received pass event fires with default priority", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "verdict_received",
+      runId: "run-123",
+      phase: "adversarial",
+      verdict: "pass",
+      summary: "All checks passed",
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    // PASS verdict uses default priority
+    expect(headers["Priority"]).toBeUndefined()
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("PASS")
+  })
+
+  test("verdict_received reject event fires with high priority", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "verdict_received",
+      runId: "run-123",
+      phase: "adversarial",
+      verdict: "reject",
+      summary: "Critical issues found",
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    expect(headers["Priority"]).toBe("high")
+  })
+
+  test("budget_warning event fires with high priority", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "budget_warning",
+      runId: "run-123",
+      spent: 8.50,
+      cap: 10.00,
+      percentUsed: 85,
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    expect(headers["Priority"]).toBe("high")
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("85%")
+  })
+
+  test("budget_exceeded event fires with urgent priority", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "budget_exceeded",
+      runId: "run-123",
+      spent: 12.00,
+      cap: 10.00,
+      atPhase: "security",
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    expect(headers["Priority"]).toBe("urgent")
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("security")
+  })
+
+  test("run_failed event fires with urgent priority", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "run_failed",
+      runId: "run-123",
+      failedPhase: "implementer",
+      error: "API rate limit exceeded",
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const headers = fetchCalls[0]!.options.headers as Record<string, string>
+    expect(headers["Priority"]).toBe("urgent")
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("API rate limit exceeded")
+  })
+
+  test("run_started event includes worktreePath and estimatedCost", () => {
+    const dispatcher = new NotificationDispatcher([target])
+    const event: NotificationEvent = {
+      type: "run_started",
+      runId: "run-123",
+      pipeline: "ultra-implement",
+      targetDir: "/home/user/project",
+      worktreePath: "/home/user/.wopr/worktrees/feature-branch",
+      estimatedCost: 5.00,
+    }
+    dispatcher.fire(event)
+    expect(fetchCalls.length).toBe(1)
+    const body = fetchCalls[0]!.options.body as string
+    expect(body).toContain("ultra-implement")
+    expect(body).toContain("feature-branch")
+    expect(body).toContain("$5.00")
+  })
 })
