@@ -404,6 +404,33 @@ describe("pipeline resolution", () => {
       "not an earlier agent step",
     )
   })
+
+  test("rejects step name with path-traversal characters (../)", () => {
+    expect(() =>
+      resolve({ steps: [{ agent: "implementer", name: "../../../etc/passwd" }] }),
+    ).toThrow(/name.*invalid/)
+  })
+
+  test("rejects step name starting with a dot", () => {
+    expect(() =>
+      resolve({ steps: [{ agent: "implementer", name: ".hidden" }] }),
+    ).toThrow(/name.*invalid/)
+  })
+
+  test("rejects step name with spaces", () => {
+    expect(() =>
+      resolve({ steps: [{ agent: "implementer", name: "my step" }] }),
+    ).toThrow(/name.*invalid/)
+  })
+
+  test("allows valid step names with dashes and underscores", () => {
+    const pipeline = resolve({
+      steps: [{ agent: "implementer", name: "my-step_name" }],
+    })
+    const [step] = pipeline.steps
+    expect(step?.type).toBe("agent")
+    if (step?.type === "agent") expect(step.name).toBe("my-step_name")
+  })
 })
 
 describe("step filters", () => {

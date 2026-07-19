@@ -7,7 +7,6 @@ import { readRunMetadata, type RunMetadata } from "../metadata"
 import { listRuns as listRunEntries, type RunEntry } from "../runs"
 import { BudgetExceededError, isUserAbortError } from "../runner"
 import { newRunID, runDir, runsRoot, isValidRunID } from "../workspace"
-
 import { RunRegistry } from "./_internal"
 import { RunNotFoundError } from "./errors"
 import type { RunHandle, RunInput, RunReport, RunStatus, RunCostDetail, RunDiff, RunCommitInfo } from "./types"
@@ -143,6 +142,7 @@ function parseArgsFromInput(input: RunInput): import("../cli").ParsedArgs {
     files: input.files ?? [],
     onlySteps: input.onlySteps ?? [],
     skipSteps: input.skipSteps ?? [],
+    steps: input.steps,
     resumeRunID: (input as any).resumeRunID ?? "",
     keepRunDir: input.keepRunDir ?? true,
     modelOverride: input.modelOverride ?? "",
@@ -150,7 +150,7 @@ function parseArgsFromInput(input: RunInput): import("../cli").ParsedArgs {
     humanReview: false,
     maxAttempts: input.maxAttempts ?? 2,
     baseRef: input.baseRef,
-    pipeline: input.pipeline,
+    pipeline: input.pipeline ?? "implement",
     budget: input.budget ? String(input.budget.perRun) : undefined,
     budgetMode: input.budget?.onExceed === "warn-and-continue" ? "warn" : undefined,
     worktree: input.worktree ? true : undefined,

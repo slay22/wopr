@@ -6,6 +6,7 @@ import { detectBaseRef, initializeRepoWithInitialCommit, repoBootstrapStatus } f
 import { log } from "./log"
 import { NotificationDispatcher, parseNotificationUrl } from "./notifications"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
+import type { StepSpec, PipelineSpec } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
 import type { Budget, Pipeline, RunOptions } from "./types"
@@ -22,6 +23,8 @@ export type ParsedArgs = {
   promptFile?: string
   help?: boolean
   pipeline?: string
+  /** Custom step specs for dynamic pipeline composition (e.g. --steps "implementer,tests"). Takes precedence over pipeline. */
+  steps?: StepSpec[]
   files: string[]
   onlySteps: string[]
   skipSteps: string[]
@@ -281,6 +284,9 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
   if (parsed.prompt && parsed.promptFile) {
     throw new Error("use either a positional prompt or --prompt-file, not both")
   }
+  if (parsed.pipeline && parsed.steps) {
+    throw new Error("--pipeline and --steps are mutually exclusive; use one or the other")
+  }
   if (parsed.resumeRunID && (parsed.prompt || parsed.promptFile)) {
     throw new Error("--resume continues a previous run with its original PRD; it can't take a new prompt")
   }
@@ -385,15 +391,30 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
   const humanReview = parsed.humanReview ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
 
   const agents = buildAgentRegistry(config)
-  const pipelineName = parsed.pipeline ?? defaults.pipeline ?? defaultPipelineName
   let pipeline: Pipeline
-  try {
-    pipeline = resolvePipeline({ name: pipelineName, spec: selectPipelineSpec(config, pipelineName), agents, defaultModel: defaults.model })
-  } catch (error) {
-    // A resumed run replays the pipeline frozen in its metadata; a config
-    // that has since broken must not block it. New runs surface the error.
-    if (!parsed.resumeRunID) throw error
-    pipeline = defaultPipeline()
+  const pipelineName = parsed.pipeline ?? defaults.pipeline ?? defaultPipelineName
+
+  // Custom steps take precedence over named pipeline
+  if (parsed.steps) {
+    const customSpec: PipelineSpec = {
+      description: "Custom dynamic pipeline composed from --steps",
+      steps: parsed.steps,
+    }
+    try {
+      pipeline = resolvePipeline({ name: "custom", spec: customSpec, agents, defaultModel: defaults.model })
+    } catch (error) {
+      if (!parsed.resumeRunID) throw error
+      pipeline = defaultPipeline()
+    }
+  } else {
+    try {
+      pipeline = resolvePipeline({ name: pipelineName, spec: selectPipelineSpec(config, pipelineName), agents, defaultModel: defaults.model })
+    } catch (error) {
+      // A resumed run replays the pipeline frozen in its metadata; a config
+      // that has since broken must not block it. New runs surface the error.
+      if (!parsed.resumeRunID) throw error
+      pipeline = defaultPipeline()
+    }
   }
   // --no-human-review / --no-human-step (and non-interactive defaults) drop manual gates from
   // the run entirely, so they never show up as steps.
@@ -487,6 +508,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     skipSteps: [],
     targetDir: process.cwd(),
     notify: [],
+    steps: undefined,
   }
   const positional: string[] = []
 
@@ -523,6 +545,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--file":
       case "-f":
         parsed.files.push(takeValue())
+        break
+      case "--steps":
+        // Comma-separated list of agent names -> StepSpec[]
+        parsed.steps = listValue(takeValue()).map((name) => ({ agent: name }))
         break
       case "--pipeline":
       case "-p":
@@ -666,6 +692,9 @@ Commands:
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all steps (repeatable)
+  --steps <agents>         Comma-separated list of agent names for a custom dynamic
+                           pipeline (e.g. --steps "implementer,tests"). Takes
+                           precedence over --pipeline.
   --pipeline, -p <name>    Pipeline to run (default: "implement"), which runs
                            implementer,patterns,security,design,tests,adversarial
   --only <steps>           Run only these pipeline steps

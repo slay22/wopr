@@ -136,6 +136,93 @@ describe("suggestConfigForBudget", () => {
   })
 })
 
+// ─── Dynamic pipeline composition with custom steps ───────────────────
+
+describe("previewRun with custom steps", () => {
+  test("accepts a steps array and takes precedence over pipeline", () => {
+    const preview = previewRun({
+      prompt: "test",
+      steps: [{ agent: "implementer" }, { agent: "test-engineer" }],
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(preview.steps.length).toBe(2)
+    const stepNames = preview.steps.map((s) => s.name)
+    expect(stepNames).toEqual(["implementer", "test-engineer"])
+    expect(preview.runId).toBeTruthy()
+  })
+
+  test("step names with custom name override", () => {
+    const preview = previewRun({
+      prompt: "test",
+      steps: [
+        { agent: "implementer", name: "write-code" },
+        { agent: "test-engineer", name: "verify" },
+      ],
+      targetDir: "/tmp/test-repo",
+    })
+
+    const stepNames = preview.steps.map((s) => s.name)
+    expect(stepNames).toEqual(["write-code", "verify"])
+  })
+
+  test("model override in steps propagates", () => {
+    const preview = previewRun({
+      prompt: "test",
+      steps: [
+        { agent: "implementer", model: "opencode/deepseek-v4-flash" },
+      ],
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(preview.steps[0]!.model).toContain("opencode/deepseek-v4-flash")
+  })
+
+  test("throws when neither pipeline nor steps is provided", () => {
+    expect(() =>
+      previewRun({
+        prompt: "test",
+        targetDir: "/tmp/test-repo",
+      }),
+    ).toThrow(/pipeline or steps/)
+  })
+
+  test("throws when steps uses unknown agent", () => {
+    expect(() =>
+      previewRun({
+        prompt: "test",
+        steps: [{ agent: "nonexistent-agent" }],
+        targetDir: "/tmp/test-repo",
+      }),
+    ).toThrow(/unknown agent/)
+  })
+})
+
+describe("estimateCost with custom steps", () => {
+  test("estimates cost from a steps array", () => {
+    const cost = estimateCost({
+      prompt: "test",
+      steps: [{ agent: "implementer" }, { agent: "test-engineer" }],
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(cost.min).toBeGreaterThanOrEqual(0)
+    expect(cost.max).toBeGreaterThanOrEqual(cost.min)
+    expect(cost.expected).toBeGreaterThanOrEqual(cost.min)
+    expect(Object.keys(cost.byPhase).length).toBe(2)
+  })
+
+  test("throws when steps references unknown agent", () => {
+    expect(() =>
+      estimateCost({
+        prompt: "test",
+        steps: [{ agent: "ghost-agent" }],
+        targetDir: "/tmp/test-repo",
+      }),
+    ).toThrow(/unknown agent/)
+  })
+})
+
 // ─── Edge cases ─────────────────────────────────────────────────────────
 
 describe("planning edge cases", () => {

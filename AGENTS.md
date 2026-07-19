@@ -68,13 +68,14 @@ Pick the smallest pipeline that does the job. More phases = more time, more cost
 | If you want to… | Pipeline | Notes |
 |---|---|---|
 | Add a feature or implement a spec | `implement` | 6 phases: implementer, patterns, security, design, tests, adversarial |
-| Same as above, but cost-sensitive | `implement-lite` | Swaps the high-end model on the heavy phases for a cheaper one |
+| Same as above, but cost-sensitive | `implement-lite` _(deprecated)_ | Swaps to cheaper models. Prefer `implement` + `suggestConfigForBudget({ tier: "free-only" })`. |
 | Audit a branch without changing code | `review` | Read-only. Output: `reports/report.md` |
-| Same, but cost-sensitive | `review-lite` | |
+| Same, but cost-sensitive | `review-lite` _(deprecated)_ | Prefer `review` + `suggestConfigForBudget({ tier: "free-only" })`. |
 | Audit **and apply accepted fixes** | `refine` | 7 phases: scope, bugs, clean-code, security, triage, fixes, validator |
 | Same, but every audit runs on two models in parallel | `ultra-refine` | |
 | Implement + multi-model review of initial diff + final audit | `ultra-implement` | Heaviest; for risky changes |
 | Self-correcting: re-plan from validator findings until PASS or cap | `converge` | The headline "closes the loop" mode. Most expensive. |
+| Pick your own steps | **dynamic custom pipeline** | Pass a `steps` array or use `--steps` CLI flag. See §17. |
 
 **Decision rules:**
 
@@ -235,7 +236,9 @@ wopr --worktree --yolo --prompt-file prd.md --keep-run-dir
 # walk away. get a phone ping on every phase + verdict + finish.
 ```
 
-For the **fully remote** workflow (you have to be able to approve from your phone), see §15: remote permission approvals via ntfy. That's a separate feature — `--yolo` is the simple "I trust the agent, denylist is enough" path.
+For live progress pings on a run you're not watching, see §14 (Notifications). `--yolo` is the simple "I trust the agent, denylist is enough" path.
+
+> The remote-permissions feature (ntfy approval from your phone) is on the [ROADMAP](ROADMAP.md) — when it lands, the workflow above changes from "auto-allow all" to "phone-prompted decisions."
 
 ---
 
@@ -652,7 +655,7 @@ The MCP server and pi extension (both separate PRDs) are thin wrappers over thes
 
 When building a transport, import from `src/core/index.ts` and wrap each function in the protocol's request/response shape. No `wopr` shell calls, no `parseAndRun`, no direct imports from `src/runner.ts`.
 
-## 15. MCP server (`wopr mcp`)
+## 16. MCP server (`wopr mcp`)
 
 The wopr MCP server runs as a stdio-based JSON-RPC server that wraps the core API
 for LLM-driven coding agents (Claude Code, Cursor, Codex, Continue, etc.).
@@ -678,10 +681,10 @@ Add the following to your agent's MCP configuration (e.g. `.mcp.json`):
 ```bash
 wopr mcp              # Start the MCP server (stdio, runs until SIGINT/SIGTERM)
 wopr mcp --version    # Print version + "MCP server ready"
-wopr mcp --list-tools # Print all 22 tool names and descriptions
+wopr mcp --list-tools # Print all 23 tool names and descriptions
 ```
 
-### The 22 tools
+### The 23 tools
 
 All tools are flat (no namespacing). Inputs accept JSON objects matching the tool's
 input schema. Tools return JSON-stringified results in a `text` content block.
@@ -744,7 +747,91 @@ See [`docs/mcp-installation.md`](./docs/mcp-installation.md) for ready-to-use
 `.mcp.json` / `.cursor/mcp.json` / Codex `config.toml` snippets for
 Claude Code, Cursor, and Codex.
 
-## 16. One last thing
+## 17. Composing pipelines dynamically
+
+Instead of picking a named pipeline, you can pass a custom `steps` array.
+The agent (or the spec) decides which steps to run, in what order. WOPR
+still wraps the steps in a `Plan`-shaped `Pipeline` internally (with the
+per-phase commit, diff, and report machinery), so the experience is
+identical — just without the constraint of the 8 built-in shapes.
+
+```typescript
+// MCP / Claude Code example — recommend a pipeline, then run exactly those steps.
+// recommendPipeline returns `custom` steps for high-rigor audit/security contexts:
+import { recommendPipeline, startRun } from "./src/core"
+
+const rec = await recommendPipeline({
+  prompt: "check the auth module for security issues",
+  preferences: { readOnly: true, rigor: "high" },
+})
+// → {
+//     kind: "custom",
+//     reason: "read-only review with high rigor: custom audit pipeline",
+//     steps: [
+//       { agent: "review-scope" },
+//       { agent: "security-reviewer" },
+//       { agent: "adversarial-reviewer" },
+//       { agent: "review-report" },
+//     ],
+//   }
+
+// Start a run with those exact steps. For a trivial fix you'd usually skip
+// recommendPipeline and pass a minimal `steps` array directly:
+const handle = startRun({
+  prompt: "check the auth module for security issues",
+  targetDir: "/Users/me/myapp",
+  steps: rec.kind === "custom" ? rec.steps : undefined,
+  budget: { perRun: 0.50 },
+})
+```
+
+### Via CLI
+
+```bash
+wopr --steps "implementer,tests" --prompt-file prd.md
+wopr --steps "security-auditor,review-fixer,review-validator" "Fix things"
+```
+
+Comma-separated agent names resolve to `{ agent: <name> }` steps. The `--steps`
+flag is mutually exclusive with `--pipeline`.
+
+### Via MCP `start_run`
+
+The `start_run` tool accepts a `steps` array directly. When `steps` is set,
+`pipeline` is ignored.
+
+```json
+{
+  "prompt": "fix the typo in src/foo.ts",
+  "targetDir": "/Users/me/myapp",
+  "steps": [
+    { "agent": "implementer" },
+    { "agent": "test-engineer" }
+  ]
+}
+```
+
+### Via `recommend_pipeline` (MCP tool)
+
+The `recommend_pipeline` MCP tool (and its core function counterpart) uses a
+keyword-based heuristic to recommend either a named pipeline or a custom steps
+array. No LLM cost — pure string matching + preference logic.
+
+### Step names
+
+Step names correspond to agent names from the registry (`list_agents`). Each
+step can also specify an optional `model` override and an optional `name`.
+
+### Deprecation of `*-lite`
+
+The `*-lite` pipelines (`implement-lite`, `review-lite`) are pre-baked budget
+presets. With Budgets (`--budget`, `suggestConfigForBudget`) in main, these are
+redundant — use `implement` or `review` with `suggestConfigForBudget({ budget,
+tier: "free-only" })` instead. They stay for back-compat; removed in v0.3.
+
+---
+
+## 18. One last thing
 
 WOPR is a **draft generator**, not a final-answer machine. Every output needs human review before it ships to a real codebase. The pipeline's job is to do the 80% — the boring implementation, the standard patterns, the obvious tests — so the human can spend their attention on the 20% that matters: is the architecture right, are the tradeoffs the right ones, does this actually solve the user's problem.
 
