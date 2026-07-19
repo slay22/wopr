@@ -21,7 +21,7 @@ Typical uses:
 - **Turn up the rigor for risky changes.** `ultra-implement` and `ultra-refine` fan every review out across two models, then finish with a fixer that applies only blocking findings and a final validator.
 - **Cap the cost of a run.** `wopr --budget 5.00 --prompt-file prd.md` aborts cleanly if the run would exceed $5. Configurable per-run, per-pipeline, or globally in `.wopr/config.yaml`. The TUI shows a live budget meter alongside the DEFCON meter.
 - **Get phone notifications on every phase.** `wopr --notify ntfy://wopr-leo-1234 --prompt-file prd.md` pings your phone (or a self-hosted ntfy server) when each phase finishes and on the validator's verdict. Off by default; opt in per-run or via config.
-- **Drive wopr from another coding agent.** `wopr mcp` starts an [MCP](https://modelcontextprotocol.io/) server (stdio transport) that exposes 22 tools over the typed core API. Claude Code, Cursor, Codex, and Continue can call `start_run`, `get_run_status`, `suggest_config_for_budget`, `preview_run`, and 18 more — zero shell, zero `wopr` subprocess.
+- **Drive wopr from another coding agent.** `wopr mcp` starts an [MCP](https://modelcontextprotocol.io/) server (stdio transport) that exposes 23 tools over the typed core API. Claude Code, Cursor, Codex, and Continue can call `start_run`, `get_run_status`, `suggest_config_for_budget`, `preview_run`, and 19 more — zero shell, zero `wopr` subprocess.
 - **Encode your team's actual workflow.** Pipelines are YAML in `.wopr/config.yaml`: define, say, a `ship` pipeline — refine the branch, sync it with its base, draft the PR — and run `wopr -p ship`.
 
 Use it as a **CLI** or as a **TUI**, interchangeably: every run can be launched with plain flags and prompt files (`--no-tui` gives you plain logs for pipes and CI), or driven entirely from the TUI — `wopr` with no arguments opens the interactive launcher, every run gets a live dashboard, `wopr runs` browses past runs, and `wopr config` edits global and project config in place.
@@ -33,7 +33,7 @@ WOPR is reachable from three places, sharing the same engine and the same per-ru
 | Surface | Use it from | When |
 |---|---|---|
 | **CLI / TUI** | `wopr` shell command, or the interactive launcher | You (the human) are driving the run. Flags, prompt files, the dashboard, the runs browser. |
-| **MCP server** | `wopr mcp` — 22 tools over [Model Context Protocol](https://modelcontextprotocol.io/) stdio | Another coding agent (Claude Code, Cursor, Codex, Continue) calls wopr programmatically. Zero shell, zero subprocess. |
+| **MCP server** | `wopr mcp` — 23 tools over [Model Context Protocol](https://modelcontextprotocol.io/) stdio | Another coding agent (Claude Code, Cursor, Codex, Continue) calls wopr programmatically. Zero shell, zero subprocess. |
 | **Typed core API** | `import { startRun, listPipelines, suggestConfigForBudget } from "src/core"` | You build a custom transport, a pi extension, an IDE plugin, or anything else. The same functions the MCP server wraps. |
 
 Each surface is a thin layer over the same engine. The CLI/TUI don't go through the MCP server; the MCP server doesn't go through the CLI — both consume the core API directly.
@@ -95,19 +95,21 @@ WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). 
 | Pipeline | Changes code? | What it does |
 |---|---|---|
 | `implement` | yes | **The default** (runs with no `-p`). Implement a PRD, then audit, polish, test, and adversarial review (the table above). |
-| `implement-lite` | yes | Same workflow and agents as `implement`, but runs the heavy phases (`implementer`, `patterns`, `security`, `tests`) on a lower-cost model instead of the high-end default, for a cheaper implementation run. |
+| `implement-lite` _(deprecated)_ | yes | Same workflow and agents as `implement`, but runs the heavy phases (`implementer`, `patterns`, `security`, `tests`) on a lower-cost model instead of the high-end default, for a cheaper implementation run. |
 | `ultra-implement` | yes | Like `implement`, but the pattern/security/adversarial reviews of the initial diff run in parallel across two models feeding a triage step, and the run ends with an audit-only final review, a fixer that applies only blocking findings, and a final validator. |
 | `refine` | yes | Audit the current diff (scope → bugs → clean-code → security), triage the findings adversarially, apply the accepted fixes, then validate them. |
 | `ultra-refine` | yes | Like `refine`, but every read-only audit is fanned out across two models before triage, fixes, and validation. |
 | `converge` | yes | **Self-correcting.** A parallel read-only panel review (patterns / security / design), then a plan→implement→validate loop that re-plans on the validator's findings until it passes, stalls, or hits `maxIterations` (see [The converge loop](#the-converge-loop-converge)). |
 | `review` | **no — report only** | Scope the diff, run the bug / clean-code(+patterns) / security audits **in parallel across two models each**, then a single step synthesizes everything into one prioritized findings report. Makes no changes; the run's output is `reports/report.md`, which you read to decide whether to follow up with a `refine` run. |
-| `review-lite` | **no — report only** | Same as `review`, but the scope step and first audit model drop to a lower-cost model; the second parallel audit model and the final report stay on the high-end default. |
+| `review-lite` _(deprecated)_ | **no — report only** | Same as `review`, but the scope step and first audit model drop to a lower-cost model; the second parallel audit model and the final report stay on the high-end default. |
 
 `refine`/`ultra-refine` are the change-applying counterparts of `review`: run `review` first to get a report, then `refine` if you want the fixes applied.
 
+You can also compose your own sequence of agents with `--steps` (or the MCP `steps` array); it takes precedence over a named pipeline. See [AGENTS.md §17](AGENTS.md#17-composing-pipelines-dynamically).
+
 ## The MCP server (`wopr mcp`)
 
-`wopr mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io/) server that speaks stdio JSON-RPC and exposes **22 tools** over the typed core API. Once installed, an agent in Claude Code, Cursor, Codex, or Continue can drive wopr end-to-end without shelling out.
+`wopr mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io/) server that speaks stdio JSON-RPC and exposes **23 tools** over the typed core API. Once installed, an agent in Claude Code, Cursor, Codex, or Continue can drive wopr end-to-end without shelling out.
 
 ### Install
 
@@ -127,7 +129,7 @@ In your agent's MCP config (e.g. `~/.config/claude-code/.mcp.json`, `~/.cursor/m
 
 Restart the agent. It will discover the 22 `wopr_*` tools automatically. See [`docs/mcp-installation.md`](docs/mcp-installation.md) for ready-to-use snippets per agent.
 
-### The 22 tools (at a glance)
+### The 23 tools (at a glance)
 
 | Category | Tools |
 |---|---|
@@ -142,7 +144,7 @@ Each tool maps 1:1 to a function in `src/core/` (the core API). The full signatu
 
 > "Use wopr to add a dark mode toggle. I have $2 to spend."
 
-Claude Code (now armed with the 22 tools) calls them in sequence: `list_pipelines` → `list_models` → `suggest_config_for_budget` → `preview_run` → narrate the plan → user approves → `start_run` → poll `get_run_status` → read `get_run_report` for the verdict → `get_run_cost` and `get_run_diff` for the summary. Zero `wopr` shell calls, zero subprocesses, full state in the model context. The MCP transport is one of several over the same core API — a pi extension does the same thing for pi, a CLI wrapper does it for humans.
+Claude Code (now armed with the 23 tools) calls them in sequence: `list_pipelines` → `list_models` → `suggest_config_for_budget` → `preview_run` → narrate the plan → user approves → `start_run` → poll `get_run_status` → read `get_run_report` for the verdict → `get_run_cost` and `get_run_diff` for the summary. Zero `wopr` shell calls, zero subprocesses, full state in the model context. The MCP transport is one of several over the same core API — a pi extension does the same thing for pi, a CLI wrapper does it for humans.
 
 ## Notifications (`--notify`)
 
