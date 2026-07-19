@@ -1,6 +1,16 @@
 import type { NotificationTarget, NtfyTarget } from "./types"
 
 /**
+ * Redacts any userinfo (`user:pass@`) before echoing a URL in an error
+ * message, so credentials are never leaked through logs or CLI output
+ * (which re-wrap this message in `ConfigError` / CLI errors).
+ */
+function maskCredentialsForError(raw: string): string {
+  // scheme://userinfo@host/path → scheme://***@host/path
+  return raw.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/@\s]+@)/, "$1***@")
+}
+
+/**
  * Parses a URL of the form:
  *   ntfy://<topic>                              → ntfy.sh, no auth
  *   ntfy://<server>/<topic>                    → self-hosted, no auth
@@ -10,7 +20,7 @@ import type { NotificationTarget, NtfyTarget } from "./types"
  */
 export function parseNotificationUrl(raw: string): NotificationTarget {
   if (!raw.startsWith("ntfy://")) {
-    throw new Error(`notification URL must start with "ntfy://", got: ${raw}`)
+    throw new Error(`notification URL must start with "ntfy://", got: ${maskCredentialsForError(raw)}`)
   }
 
   const withoutScheme = raw.slice("ntfy://".length)

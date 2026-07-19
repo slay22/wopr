@@ -60,4 +60,17 @@ describe("parseNotificationUrl", () => {
   test("throws on empty topic after host", () => {
     expect(() => parseNotificationUrl("ntfy://example.com/")).toThrow()
   })
+
+  test("does not echo credentials in error message", () => {
+    // A wrong-scheme URL that happens to carry userinfo must not leak the
+    // password when the parser reports the malformed input.
+    let message = ""
+    try {
+      parseNotificationUrl("https://alice:s3cret@example.com/wopr-private")
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e)
+    }
+    expect(message).not.toContain("s3cret")
+    expect(message).toContain("***@")
+  })
 })
