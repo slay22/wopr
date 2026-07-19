@@ -50,8 +50,6 @@ const intentGroups: IntentGroup[] = [
     name: "implement",
     keywords: ["add", "implement", "build", "create", "write", "feature", "new"],
     named: "implement",
-    customPreferred: (input) => input.preferences?.rigor === "low",
-    buildCustom: () => ["implementer", "tests"],
   },
 ]
 
