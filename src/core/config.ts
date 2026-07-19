@@ -1,16 +1,19 @@
 import { readFileSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 
 import {
   globalConfigPath,
   loadGlobalWoprConfig,
   loadMergedWoprConfig,
   loadWoprConfig,
+  mergeWoprConfigs,
   parseWoprConfig,
   projectConfigPath,
   serializeWoprConfig,
   type WoprConfig,
 } from "../config"
+import { woprHome, woprRoot } from "../workspace"
 
 import type { ConfigScope, ConfigFormat } from "./types"
 
@@ -18,36 +21,42 @@ export function getConfig(scope?: ConfigScope, targetDir?: string): WoprConfig |
   const dir = targetDir ?? process.cwd()
 
   if (!scope || scope === "merged") {
-    // Merged config: loads both project and global, synchronously returns
-    // undefined if we can't do it sync. We use the async loaders wrapped
-    // in a static init approach. getConfig is documented as pure/no-I/O
-    // for the "merged" scope; we load the global + project configs.
-    // For a synchronous path we read the files directly.
-    // We do a best-effort sync read via the existing async functions
-    // but this is a limitation — consumers that need sync access should
-    // know they get the merged view, which requires I/O.
-    // For now we instantiate synchronously with what's available.
-    return loadConfigSync(dir, scope ?? "merged")
+    const project = readConfigFileSync(projectConfigCandidates(dir), dir)
+    const global = readConfigFileSync(globalConfigCandidates(), woprRoot())
+    return mergeWoprConfigs(global, project)
   }
 
   if (scope === "global") {
-    return loadConfigSync(dir, "global")
+    return readConfigFileSync(globalConfigCandidates(), woprRoot())
   }
 
   if (scope === "project") {
-    return loadConfigSync(dir, "project")
+    return readConfigFileSync(projectConfigCandidates(dir), dir)
   }
 
   return undefined
 }
 
-function loadConfigSync(targetDir: string, scope: "global" | "project" | "merged"): WoprConfig | undefined {
-  // We use the async loaders but this function is documented as potentially
-  // having I/O. The callers in MCP/agent context are all async-capable.
-  // For a truly sync API we'd read files synchronously, but the existing
-  // config loaders are async — we wrap them in a quick Promise.
-  // This is a best-effort sync wrapper. Prefer the async version below.
-  throw new Error("getConfig requires async I/O; use getConfigAsync instead")
+/** Candidate config file paths (yaml + yml) for a given base path. */
+function projectConfigCandidates(dir: string): string[] {
+  return [projectConfigPath(dir), join(dir, ".wopr", "config.yml")]
+}
+
+function globalConfigCandidates(): string[] {
+  return [globalConfigPath(), join(woprHome(), "config.yml")]
+}
+
+/** Synchronously read + parse the first existing candidate config file. */
+function readConfigFileSync(candidates: string[], targetDir: string): WoprConfig | undefined {
+  for (const path of candidates) {
+    try {
+      const body = readFileSync(path, "utf8")
+      return parseWoprConfig(body, path, targetDir)
+    } catch {
+      // file missing or unreadable; try the next candidate
+    }
+  }
+  return undefined
 }
 
 /** Async version of getConfig that properly loads config from disk. */

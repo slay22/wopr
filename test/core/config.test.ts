@@ -105,8 +105,13 @@ describe("serializeWoprConfig", () => {
 // ─── getConfig / getConfigAsync ─────────────────────────────────────────
 
 describe("getConfig", () => {
-  test("sync getConfig throws when called (sync not supported)", () => {
-    expect(() => getConfig("merged", "/tmp/test-dir")).toThrow()
+  test("sync getConfig returns config-or-undefined without throwing", () => {
+    // No file I/O assertions beyond "it does not throw a 'use async' error".
+    let result: unknown
+    expect(() => {
+      result = getConfig("merged", "/tmp/non-existent-dir-for-test-12345")
+    }).not.toThrow()
+    expect(result === undefined || typeof result === "object").toBe(true)
   })
 })
 

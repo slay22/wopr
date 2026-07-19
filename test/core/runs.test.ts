@@ -246,10 +246,15 @@ describe("getRunStatusAsync", () => {
 // ─── listRuns / listRunsAsync ────────────────────────────────────────────
 
 describe("listRuns", () => {
-  test("sync listRuns returns empty array (best-effort)", () => {
+  test("sync listRuns returns an array of run summaries", () => {
     const runs = listRuns()
     expect(Array.isArray(runs)).toBe(true)
-    expect(runs.length).toBe(0)
+    expect(runs.length).toBeGreaterThanOrEqual(0)
+    if (runs.length > 0) {
+      const r = runs[0]!
+      expect(typeof r.runId).toBe("string")
+      expect(typeof r.state).toBe("string")
+    }
   })
 })
 

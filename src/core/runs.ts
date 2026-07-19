@@ -1,11 +1,12 @@
+import { readFileSync, readdirSync } from "node:fs"
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 
-import { readRunMetadata } from "../metadata"
+import { readRunMetadata, type RunMetadata } from "../metadata"
 import { listRuns as listRunEntries, type RunEntry } from "../runs"
 import { BudgetExceededError, isUserAbortError } from "../runner"
-import { newRunID, runDir } from "../workspace"
+import { newRunID, runDir, runsRoot, isValidRunID } from "../workspace"
 
 import { RunRegistry } from "./_internal"
 import { RunNotFoundError } from "./errors"
@@ -183,23 +184,58 @@ function validatePhaseName(phase: string): void {
 
 // ─── Status polling ─────────────────────────────────────────────────────────
 
+/** Synchronous metadata reader (mirrors readRunMetadata without the async I/O). */
+function readRunMetadataSync(path: string): RunMetadata | undefined {
+  let body: string
+  try {
+    body = readFileSync(path, "utf8")
+  } catch {
+    return undefined
+  }
+  try {
+    const parsed = JSON.parse(body) as Partial<RunMetadata> & { schemaVersion?: number }
+    if (![1, 2].includes(parsed.schemaVersion ?? 0) || typeof parsed.phases !== "object" || !parsed.phases) {
+      return undefined
+    }
+    return { ...parsed, schemaVersion: 2, phases: parsed.phases } as RunMetadata
+  } catch {
+    return undefined
+  }
+}
+
+/** Map persisted run metadata to a RunStatus. Shared by the sync + async pollers. */
+function mapMetadataToStatus(metadata: RunMetadata): RunStatus {
+  const phaseEntries = Object.entries(metadata.phases)
+  const startedAt = metadata.createdAt
+  const finishedAt = metadata.updatedAt
+  const completed = phaseEntries.filter(([, p]) => p.status === "completed" || p.status === "skipped").length
+  const total = phaseEntries.length
+
+  const failedEntry = phaseEntries.find(([, p]) => p.status === "failed")
+  if (failedEntry) {
+    return { state: "failed", startedAt, finishedAt, error: "phase failed", failedPhase: failedEntry[0] }
+  }
+  if (completed === total && total > 0) {
+    return { state: "completed", startedAt, finishedAt, totalCost: metadata.cost?.total?.totalCost ?? 0, outcome: "success" }
+  }
+  if (completed > 0) {
+    const completedNames = phaseEntries.filter(([, p]) => p.status === "completed" || p.status === "skipped").map(([name]) => name)
+    return { state: "running", startedAt, currentPhase: "", completedPhases: completedNames, percentComplete: Math.round((completed / total) * 100) }
+  }
+  return { state: "starting", startedAt }
+}
+
 export function getRunStatus(runId: string): RunStatus {
   // Check in-memory registry first
   const registry = RunRegistry.instance()
   const reg = registry.get(runId)
   if (reg) return reg.status
 
-  // Check on-disk metadata for completed runs
+  // Check on-disk metadata synchronously for persisted runs.
   const dir = runDir(runId)
-  const metadataPath = join(dir, "metadata.json")
-  const metadata = readRunMetadata(metadataPath)
-  if (metadata instanceof Promise) {
-    // Fallthrough — async, not available sync
-  } else {
-    // We actually need to await this. For now, return a simple status.
-  }
-
-  throw new RunNotFoundError(runId)
+  const metadata = readRunMetadataSync(join(dir, "metadata.json"))
+  if (!metadata) throw new RunNotFoundError(runId)
+  return mapMetadataToStatus(metadata)
 }
 
 export async function getRunStatusAsync(runId: string): Promise<RunStatus> {
@@ -213,26 +249,7 @@ export async function getRunStatusAsync(runId: string): Promise<RunStatus> {
   const metadataPath = join(dir, "metadata.json")
   const metadata = await readRunMetadata(metadataPath)
   if (!metadata) throw new RunNotFoundError(runId)
-
-  const phaseEntries = Object.entries(metadata.phases)
-  const startedAt = metadata.createdAt
-  const finishedAt = metadata.updatedAt
-  const completed = phaseEntries.filter(([, p]) => p.status === "completed" || p.status === "skipped").length
-  const total = phaseEntries.length
-
-  // Determine overall status
-  const failedEntry = phaseEntries.find(([, p]) => p.status === "failed")
-  if (failedEntry) {
-    return { state: "failed", startedAt, finishedAt, error: "phase failed", failedPhase: failedEntry[0] }
-  }
-  if (completed === total && total > 0) {
-    return { state: "completed", startedAt, finishedAt, totalCost: metadata.cost?.total.totalCost ?? 0, outcome: "success" }
-  }
-  if (completed > 0) {
-    const completedNames = phaseEntries.filter(([, p]) => p.status === "completed" || p.status === "skipped").map(([name]) => name)
-    return { state: "running", startedAt, currentPhase: "", completedPhases: completedNames, percentComplete: Math.round((completed / total) * 100) }
-  }
-  return { state: "starting", startedAt }
+  return mapMetadataToStatus(metadata)
 }
 
 // ─── Run listing ────────────────────────────────────────────────────────────
@@ -247,12 +264,40 @@ export function listRuns(filter?: { targetDir?: string; since?: number; pipeline
   state: string
   totalCost: number
 }> {
-  // Use the runs.ts browser's listRuns synchronously (best-effort)
-  // The actual implementation reads on-disk metadata.
-  const entries = listRunEntries() // returns Promise<RunEntry[]>
-  // Since this is a sync function, we return an empty array.
-  // Consumers should use listRunsAsync for real results.
-  return []
+  // Read the run history directory synchronously and summarize each run.
+  let names: string[]
+  try {
+    names = readdirSync(runsRoot())
+  } catch {
+    return []
+  }
+  const ids = names.filter(isValidRunID).sort().reverse()
+  let result = ids.map((runID) => {
+    const dir = join(runsRoot(), runID)
+    const metadata = readRunMetadataSync(join(dir, "metadata.json"))
+    const phases = metadata ? Object.entries(metadata.phases) : []
+    const completed = phases.filter(([, p]) => p.status === "completed" || p.status === "skipped").length
+    const total = phases.length
+    let state = "starting"
+    if (metadata) {
+      if (phases.some(([, p]) => p.status === "failed")) state = "failed"
+      else if (completed === total && total > 0) state = "completed"
+      else if (completed > 0) state = "running"
+    }
+    return {
+      runId: runID,
+      targetDir: metadata?.targetDir ?? "",
+      pipeline: metadata?.pipeline?.name ?? "",
+      prompt: "",
+      startedAt: metadata?.createdAt ?? 0,
+      finishedAt: metadata?.updatedAt,
+      state,
+      totalCost: metadata?.cost?.total?.totalCost ?? 0,
+    }
+  })
+  if (filter?.since) result = result.filter((r) => r.startedAt >= filter.since!)
+  if (filter?.limit) result = result.slice(0, filter.limit)
+  return result
 }
 
 export async function listRunsAsync(filter?: { targetDir?: string; since?: number; pipeline?: string; limit?: number }): Promise<Array<{
