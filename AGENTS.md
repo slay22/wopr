@@ -477,7 +477,103 @@ In the project's own `.wopr/config.yaml` (dogfooding setup), the defaults are fl
 
 ---
 
-## 14. One last thing
+## 14. Core API (`src/core/index.ts`)
+
+WOPR ships a typed, callable, awaitable core API at `src/core/index.ts` (re-exported as `@earendil-works/wopr-core` in spirit). Every operation an external agent needs is exposed here as a pure or async function. The MCP server and pi extension are thin transports over this surface; the CLI/TUI also go through it internally.
+
+### The 13 exported functions
+
+| Category | Function | Description |
+|---|---|---|
+| Discovery | `listPipelines(targetDir?)` | Returns all available pipelines (built-in + project). |
+| Discovery | `describePipeline(name, targetDir?)` | Full step-by-step detail for one pipeline. |
+| Discovery | `listAgents(targetDir?)` | Returns all agents (built-in + project). |
+| Discovery | `describeAgent(name, targetDir?)` | Detail for one agent including resolved model. |
+| Discovery | `listModels(filter?)` | Models from pi's catalog, filterable by tag/free/reasoning. |
+| Discovery | `describeModel(modelID)` | Cost, context window, and tags for one model. |
+| Config | `getConfig(scope?, targetDir?)` | Load merged/project/global config. |
+| Config | `validateConfig(yaml, targetDir?)` | Validate YAML against the config schema. |
+| Config | `diffConfig(scope, yaml, targetDir?)` | Show what would change without writing. |
+| Config | `setConfig(scope, yaml, options?)` | Write config with `validateOnly` dry-run mode. |
+| Planning | `previewRun(input)` | Complete run preview without creating a workspace. |
+| Planning | `estimateCost(input)` | Pure cost projection for a pipeline. |
+| Planning | `suggestConfigForBudget({budget, pipeline, ...})` | Proposes a config that fits a budget. |
+| Runs | `startRun(input)` | Start a run; returns a `RunHandle` immediately. |
+| Runs | `getRunStatus(runId)` | Poll in-flight or finished run status. |
+| Runs | `listRuns(filter?)` | List past runs. |
+| Runs | `getRunReport(runId, phase)` | Read a phase report (markdown + structured findings). |
+| Runs | `getRunCost(runId)` | Cost breakdown by phase and model. |
+| Runs | `getRunDiff(runId)` | File-level diff summary. |
+| Runs | `getRunCommits(runId)` | Commit list with phase annotations. |
+| Runs | `cancelRun(runId, reason?)` | Abort an in-flight run. |
+| Runs | `resumeRun(runId)` | Resume an incomplete run. |
+
+### Typed errors
+
+- `ConfigError` — invalid configuration
+- `RunNotFoundError` — unknown run ID
+- `ValidationError` — config validation with the errors array
+- `AbortError` — user-requested abort
+- `BudgetExceededError` — budget cap hit
+
+### Worked example
+
+```typescript
+// 1. Discover what's available
+const pipelines = listPipelines("/Users/me/myapp")
+// → [{ name: "implement", stepCount: 6, ... }, ...]
+
+const pipeline = describePipeline("implement", "/Users/me/myapp")
+// → { name: "implement", steps: [{ name: "implementer", model: "openai/gpt-5.6-terra#xhigh", ... }, ...] }
+
+// 2. Plan within budget
+const suggestion = suggestConfigForBudget({
+  budget: 2.00,
+  pipeline: "implement",
+  targetDir: "/Users/me/myapp",
+})
+// → { proposed: {...}, estimatedCost: { expected: 0.85, ... }, fitsBudget: true }
+
+// 3. Preview
+const preview = previewRun({
+  prompt: "Add dark mode toggle",
+  pipeline: "implement",
+  targetDir: "/Users/me/myapp",
+  ...suggestion.proposed,
+})
+// → { runId: "20260719-...", steps: [...], estimatedCost: {...}, warnings: [] }
+
+// 4. Start the run
+const handle = startRun({
+  prompt: "Add dark mode toggle",
+  pipeline: "implement",
+  targetDir: "/Users/me/myapp",
+})
+// → { runId: "20260719-...", promise: <pending>, abort: <fn> }
+
+// 5. Poll
+const status = await getRunStatusAsync(handle.runId)
+// → { state: "running", currentPhase: "implementer", ... }
+
+// 6. Read results
+const finalStatus = await handle.promise
+const report = await getRunReport(handle.runId, "adversarial")
+// → { markdown: "...", verdict: "pass", stats: {...} }
+const diff = await getRunDiff(handle.runId)
+// → { filesChanged: [...], totalAdditions: 142, totalDeletions: 38, ... }
+```
+
+### Contract for transport PRDs
+
+The MCP server and pi extension (both separate PRDs) are thin wrappers over these functions. Each function is:
+
+- **Pure or async where I/O is required** — callers never block the event loop on CPU work
+- **Typed** — all inputs and outputs are fully typed in TypeScript
+- **Self-contained** — no implicit state from the CLI or TUI
+
+When building a transport, import from `src/core/index.ts` and wrap each function in the protocol's request/response shape. No `wopr` shell calls, no `parseAndRun`, no direct imports from `src/runner.ts`.
+
+## 15. One last thing
 
 WOPR is a **draft generator**, not a final-answer machine. Every output needs human review before it ships to a real codebase. The pipeline's job is to do the 80% — the boring implementation, the standard patterns, the obvious tests — so the human can spend their attention on the 20% that matters: is the architecture right, are the tradeoffs the right ones, does this actually solve the user's problem.
 

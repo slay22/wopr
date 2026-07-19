@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Added: Core API (`src/core/`)
+
+- **New module `src/core/`.** A typed, callable, awaitable orchestrator surface
+  for external consumers. The module exposes 22 functions across 4 concerns:
+  discovery (`listPipelines`, `describePipeline`, `listAgents`, `describeAgent`,
+  `listModels`, `describeModel`), config (`getConfig`, `validateConfig`,
+  `diffConfig`, `setConfig`), planning (`previewRun`, `estimateCost`,
+  `suggestConfigForBudget`), and run management (`startRun`, `getRunStatus`,
+  `listRuns`, `getRunReport`, `getRunCost`, `getRunDiff`, `getRunCommits`,
+  `cancelRun`, `resumeRun`). All functions are importable from
+  `src/core/index.ts`.
+- **`startRun` returns immediately.** Returns a `RunHandle` with `runId`,
+  `promise`, and `abort()`. Callers poll `getRunStatus(runId)` or await
+  `handle.promise` for the terminal state.
+- **Typed errors.** `RunNotFoundError`, `ValidationError`, `AbortError` join
+  the existing `ConfigError` and `BudgetExceededError`, all JSON-serializable.
+- **Structured `Finding` type.** Reports can carry a `findings` array alongside
+  free-form markdown (opt-in per phase; existing reports are unaffected).
+- **`RunRegistry` singleton.** In-memory process-level registry in
+  `src/core/_internal.ts` maps `runId → RunRegistration`, enabling
+  `cancelRun` and `getRunStatus` to find in-flight runs by ID.
+- **AGENTS.md §14** documents the full core API contract for transport PRDs.
+
+### Next up (separate PRDs)
+
+- **MCP server** — JSON-RPC transport over the core API
+- **pi extension** — `@earendil-works/wopr-for-pi` factory
+
 ### Added: Budgets (MVP)
 
 - **Run cost cap.** Set a per-run USD budget with `--budget <usd>` (CLI),
