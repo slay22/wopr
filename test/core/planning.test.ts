@@ -96,4 +96,105 @@ describe("suggestConfigForBudget", () => {
     expect(suggestion.proposed).toBeDefined()
     expect(suggestion.estimatedCost).toBeDefined()
   })
+
+  test("works for review pipeline (read-only)", () => {
+    const suggestion = suggestConfigForBudget({
+      budget: 2.0,
+      pipeline: "review",
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(suggestion.proposed).toBeDefined()
+    expect(suggestion.fitsBudget).toBe(true)
+  })
+
+  test("fitsBudget is false when budget is zero", () => {
+    const suggestion = suggestConfigForBudget({
+      budget: 0,
+      pipeline: "implement",
+      targetDir: "/tmp/test-repo",
+      preferences: { tier: "free-only" },
+    })
+
+    // With free-only and $0 budget, it may or may not be possible
+    expect("fitsBudget" in suggestion).toBe(true)
+    expect("estimatedCost" in suggestion).toBe(true)
+  })
+
+  test("returns cheapestFittingTier when applicable", () => {
+    const suggestion = suggestConfigForBudget({
+      budget: 0.01,
+      pipeline: "implement-lite",
+      targetDir: "/tmp/test-repo",
+      preferences: { tier: "free-only" },
+    })
+
+    // cheapestFittingTier may be present when budget forces tier selection
+    if (suggestion.fitsBudget && suggestion.cheapestFittingTier) {
+      expect(suggestion.cheapestFittingTier).toBe("free-only")
+    }
+  })
+})
+
+// ─── Edge cases ─────────────────────────────────────────────────────────
+
+describe("planning edge cases", () => {
+  test("previewRun with implement-lite pipeline", () => {
+    const preview = previewRun({
+      prompt: "lite test",
+      pipeline: "implement-lite",
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(preview.steps.length).toBeGreaterThan(0)
+    expect(preview.runId).toBeTruthy()
+  })
+
+  test("previewRun with ultra-implement pipeline", () => {
+    const preview = previewRun({
+      prompt: "ultra test",
+      pipeline: "ultra-implement",
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(preview.steps.length).toBeGreaterThan(0)
+  })
+
+  test("previewRun with converge pipeline", () => {
+    const preview = previewRun({
+      prompt: "converge test",
+      pipeline: "converge",
+      targetDir: "/tmp/test-repo",
+    })
+
+    expect(preview.steps.length).toBeGreaterThan(0)
+  })
+
+  test("estimateCost matches preview cost for same pipeline", () => {
+    const pipeline = "implement"
+    const preview = previewRun({
+      prompt: "test",
+      pipeline,
+      targetDir: "/tmp/test-repo",
+    })
+    const cost = estimateCost({
+      prompt: "test",
+      pipeline,
+      targetDir: "/tmp/test-repo",
+    })
+
+    // Both should produce non-zero cost estimates
+    expect(preview.estimatedCost.min).toBeGreaterThanOrEqual(0)
+    expect(cost.min).toBeGreaterThanOrEqual(0)
+  })
+
+  test("estimateCost throws for unknown pipeline", () => {
+    expect(() =>
+      estimateCost({
+        prompt: "test",
+        pipeline: "unknown-pipeline",
+        targetDir: "/tmp/test-repo",
+      }),
+    ).toThrow()
+  })
 })

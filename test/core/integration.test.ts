@@ -10,7 +10,12 @@ import {
   suggestConfigForBudget,
   validateConfig,
   getRunReport,
+  startRun,
+  cancelRun,
+  getRunStatus,
   RunNotFoundError,
+  ValidationError,
+  AbortError,
 } from "../../src/core"
 
 describe("core API integration", () => {
@@ -169,5 +174,105 @@ describe("core API integration", () => {
     await expect(
       getRunReport("20240101-000000-aaaa", "adversarial"),
     ).rejects.toThrow() // run doesn't exist, but phase name is valid
+  })
+
+  // ─── Typed errors ───────────────────────────────────────────────────
+
+  test("ValidationError carries the errors array", () => {
+    const err = new ValidationError(["model field missing"])
+    expect(err.name).toBe("ValidationError")
+    expect(err.errors).toEqual(["model field missing"])
+  })
+
+  test("AbortError carries the reason", () => {
+    const err = new AbortError("user pressed cancel")
+    expect(err.name).toBe("AbortError")
+    expect(err.message).toContain("user pressed cancel")
+  })
+
+  // ─── startRun / cancelRun lifecycle ─────────────────────────────────
+
+  test("startRun → cancelRun completes gracefully", async () => {
+    const handle = startRun({
+      prompt: "lifecycle test",
+      pipeline: "implement",
+      targetDir: "/dev/null",
+    })
+
+    // Immediately cancel after start
+    const cancelResult = cancelRun(handle.runId)
+    expect(cancelResult.ok).toBe(true)
+
+    // The promise should resolve (not hang)
+    const final = await handle.promise
+    expect(["aborted", "failed"]).toContain(final.state)
+  })
+
+  test("cancelRun fails for non-existent run", () => {
+    const result = cancelRun("00000000-000000-xxxx")
+    if (!result.ok) {
+      expect(result.error).toContain("not found")
+    } else {
+      expect.unreachable()
+    }
+  })
+
+  test("getRunStatus returns a valid state for a fresh run", () => {
+    const handle = startRun({
+      prompt: "status test",
+      pipeline: "implement",
+      targetDir: "/dev/null",
+    })
+
+    const status = getRunStatus(handle.runId)
+    // The background task may transition to "running" before we check
+    expect(["starting", "running"]).toContain(status.state)
+    expect(typeof status.startedAt).toBe("number")
+  })
+
+  // ─── Worked example (PRD's killer demo) ─────────────────────────────
+
+  test("PRD worked example: discover → plan → budget", () => {
+    // 1. Discover what's available
+    const pipelines = listPipelines()
+    const implement = pipelines.find((p) => p.name === "implement")
+    expect(implement).toBeDefined()
+
+    const detail = describePipeline("implement")
+    expect(detail.steps.length).toBeGreaterThanOrEqual(6)
+
+    // 2. List agents
+    const agents = listAgents()
+    const implementer = agents.find((a) => a.name === "implementer")
+    expect(implementer).toBeDefined()
+
+    // 3. Find free models
+    const freeModels = listModels({ tag: "free" })
+    expect(Array.isArray(freeModels)).toBe(true)
+
+    // 4. Plan within budget
+    const suggestion = suggestConfigForBudget({
+      budget: 2.00,
+      pipeline: "implement",
+      targetDir: "/tmp/test-repo",
+    })
+    expect(suggestion.fitsBudget).toBe(true)
+    expect(suggestion.estimatedCost.expected).toBeGreaterThanOrEqual(0)
+
+    // 5. Preview
+    const preview = previewRun({
+      prompt: "Add dark mode toggle",
+      pipeline: "implement",
+      targetDir: "/tmp/test-repo",
+      ...suggestion.proposed,
+    })
+    expect(preview.runId).toBeTruthy()
+    expect(preview.runId).toMatch(/^\d{8}-\d{6}-[a-z0-9]{4}$/)
+    expect(preview.steps.length).toBeGreaterThan(0)
+
+    // 6. Verify cost structure
+    expect(preview.estimatedCost.min).toBeGreaterThanOrEqual(0)
+    expect(preview.estimatedCost.expected).toBeGreaterThanOrEqual(preview.estimatedCost.min)
+    expect(preview.estimatedCost.byPhase).toBeDefined()
   })
 })
