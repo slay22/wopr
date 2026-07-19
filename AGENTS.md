@@ -224,6 +224,19 @@ WOPR has a permission gate that intercepts bash commands. The default policy:
 
 For an agent (you), the practical guidance: **don't pass `--yolo` for security-relevant runs**. The permission gate is the safety rail; the agent is the one whose judgment is in question.
 
+### Use `--yolo` for unattended runs
+
+If you're walking away from the computer (long run, dogfooding, lunch break), **always pass `--yolo`**. The denylist (`git push`, `rm -rf /`, `sudo`, `curl|sh`, etc.) still applies — `--yolo` only auto-allows the `ask` tier. Without it, the run blocks at the first `ask` prompt and you have to be at the keyboard to answer. The cost of `--yolo` is zero in practice: every "ask" command in a typical wopr run is something like `cd <worktree>` or `ls <file>` — the kind of thing a human would approve without thinking.
+
+**Pattern for any wopr run that you won't watch live:**
+
+```bash
+wopr --worktree --yolo --prompt-file prd.md --keep-run-dir
+# walk away. get a phone ping on every phase + verdict + finish.
+```
+
+For the **fully remote** workflow (you have to be able to approve from your phone), see §15: remote permission approvals via ntfy. That's a separate feature — `--yolo` is the simple "I trust the agent, denylist is enough" path.
+
 ---
 
 ## 6. Reading results
