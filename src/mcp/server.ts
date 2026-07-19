@@ -16,16 +16,6 @@ export function createMcpServer(): Server {
 
   registerAllTools(server)
 
-  // Handle graceful shutdown
-  process.on("SIGINT", async () => {
-    await server.close()
-    process.exit(0)
-  })
-  process.on("SIGTERM", async () => {
-    await server.close()
-    process.exit(0)
-  })
-
   return server
 }
 
@@ -40,4 +30,16 @@ export async function startMcpServer(): Promise<void> {
   log.info("[mcp] wopr MCP server starting (stdio transport)")
   await server.connect(transport)
   log.info("[mcp] wopr MCP server connected via stdio")
+
+  // Graceful shutdown only matters for the long-running server process.
+  // Kept out of createMcpServer() so that factory use (e.g. in tests) does
+  // not accumulate process-level listeners.
+  process.on("SIGINT", async () => {
+    await server.close()
+    process.exit(0)
+  })
+  process.on("SIGTERM", async () => {
+    await server.close()
+    process.exit(0)
+  })
 }
