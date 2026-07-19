@@ -1,4 +1,4 @@
-export { NotificationDispatcher, formatEvent } from "./dispatcher"
+export { NotificationDispatcher } from "./dispatcher"
 export { sendNotification } from "./ntfy"
 export { parseNotificationUrl } from "./parse"
 export type {

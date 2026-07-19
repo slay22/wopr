@@ -6,7 +6,7 @@ import type { NotificationEvent, NotificationPayload, NotificationPriority, Noti
  * Pure function: maps a NotificationEvent to a NotificationPayload
  * (title, message, priority, tags, optional click URL).
  */
-export function formatEvent(event: NotificationEvent): NotificationPayload {
+function formatEvent(event: NotificationEvent): NotificationPayload {
   switch (event.type) {
     case "run_started": {
       const lines = [`Pipeline: ${event.pipeline}`, `Target: ${event.targetDir}`]
@@ -118,7 +118,7 @@ export class NotificationDispatcher {
 
   /** Send a test notification to all targets. Returns per-target results. */
   async test(): Promise<Array<{ target: NotificationTarget; ok: boolean; error?: string }>> {
-    const results = await Promise.allSettled(
+    return Promise.all(
       this.targets.map(async (target) => {
         if (target.kind !== "ntfy") return { target, ok: false, error: "unsupported target kind" }
         try {
@@ -129,9 +129,5 @@ export class NotificationDispatcher {
         }
       }),
     )
-    return results.map((result) => {
-      if (result.status === "fulfilled") return result.value
-      return { target: { kind: "ntfy" as const, server: "unknown", topic: "unknown" }, ok: false, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }
-    })
   }
 }

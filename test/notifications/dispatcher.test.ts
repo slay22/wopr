@@ -37,7 +37,7 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher([target, { ...target, topic: "wopr-test-2" }])
     expect(dispatcher.empty).toBe(false)
     dispatcher.fire({ type: "run_started", runId: "test", pipeline: "implement", targetDir: "/tmp" })
-    // The fire method is fire-and-forget, so we need a small delay
+    // fire() is fire-and-forget, but the mock fetch pushes synchronously before returning
     expect(fetchCalls.length).toBe(2)
   })
 

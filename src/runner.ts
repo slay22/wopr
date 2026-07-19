@@ -347,6 +347,8 @@ export async function run(options: RunOptions) {
     // above and TS won't retain that narrowing inside the batch's nested arrows.
     const runMetadata = metadata
     const permissionGate = permissions
+    // Wall-clock start time for the run, used in notification durations.
+    const runStartTime = Date.now()
     // Budget tracker: records cost per phase and enforces the cap.
     const costTracker = new CostTracker()
     currentCostTracker = costTracker
@@ -486,7 +488,7 @@ export async function run(options: RunOptions) {
         type: "run_completed",
         runId: workspace.runID,
         totalCost,
-        durationMs: Date.now() - Date.now(), // placeholder
+        durationMs: Date.now() - runStartTime,
         worktreePath: options.worktree?.dir,
       })
     }
