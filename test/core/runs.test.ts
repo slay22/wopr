@@ -160,6 +160,51 @@ describe("startRun", () => {
     const result = await handle.promise
     expect(["aborted", "failed"]).toContain(result.state)
   })
+
+  test("accepts custom steps array instead of pipeline", () => {
+    const input: RunInput = {
+      prompt: "test",
+      steps: [{ agent: "implementer" }, { agent: "test-engineer" }],
+      targetDir: "/tmp/test-repo",
+    }
+
+    const handle = startRun(input)
+    expect(handle.runId).toBeTruthy()
+    expect(typeof handle.runId).toBe("string")
+    expect(handle.promise).toBeInstanceOf(Promise)
+    expect(typeof handle.abort).toBe("function")
+
+    // Clean up
+    handle.abort("cleanup")
+  })
+
+  test("registers a run with custom steps", () => {
+    const input: RunInput = {
+      prompt: "test with custom steps",
+      steps: [{ agent: "implementer" }],
+      targetDir: "/tmp/test-repo",
+    }
+
+    const handle = startRun(input)
+    const registry = RunRegistry.instance()
+    const reg = registry.get(handle.runId)
+    expect(reg).toBeDefined()
+    expect(["starting", "running"]).toContain(reg!.status.state)
+
+    handle.abort("cleanup")
+  })
+
+  test("custom steps with model override", () => {
+    const input: RunInput = {
+      prompt: "test",
+      steps: [{ agent: "implementer", model: "opencode/deepseek-v4-flash" }],
+      targetDir: "/tmp/test-repo",
+    }
+
+    const handle = startRun(input)
+    expect(handle.runId).toBeTruthy()
+    handle.abort("cleanup")
+  })
 })
 
 // ─── cancelRun ───────────────────────────────────────────────────────────

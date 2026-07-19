@@ -241,4 +241,60 @@ describe("MCP integration — PRD worked example lifecycle", () => {
 
     await close()
   })
+
+  test("recommend_pipeline → start_run with custom steps lifecycle", async () => {
+    const { client, close } = await createConnectedPair()
+
+    // Step 1: recommend_pipeline for a custom pipeline
+    const recommendation = await callTool(client, "recommend_pipeline", {
+      prompt: "fix the typo in src/foo.ts",
+      preferences: { changeExisting: true, rigor: "low" },
+    })
+    expect(recommendation.kind).toBe("named")
+    expect(recommendation.pipeline).toBe("refine")
+
+    // Step 2: recommend_pipeline with custom preference → custom steps
+    const customRec = await callTool(client, "recommend_pipeline", {
+      prompt: "Check for security issues",
+      preferences: { readOnly: true, rigor: "high" },
+    })
+    expect(customRec.kind).toBe("custom")
+    expect(customRec.steps.length).toBeGreaterThan(0)
+
+    // Step 3: start_run with a custom steps array
+    const startResult = await callTool(client, "start_run", {
+      prompt: "security audit via custom pipeline",
+      steps: [
+        { agent: "security-auditor", name: "deep-scan" },
+        { agent: "test-engineer", name: "verify" },
+      ],
+      targetDir: "/dev/null",
+    })
+    expect(startResult.runId).toBeTruthy()
+    expect(startResult.status).toBe("started")
+
+    // Step 4: cancel the run
+    const cancelResult = await callTool(client, "cancel_run", { runId: startResult.runId })
+    expect(cancelResult.ok).toBe(true)
+
+    await close()
+  })
+
+  test("preview_run with steps returns correct step count", async () => {
+    const { client, close } = await createConnectedPair()
+
+    // Use custom steps array instead of pipeline
+    const preview = await callTool(client, "preview_run", {
+      prompt: "quick fix",
+      steps: [
+        { agent: "implementer", name: "fix-code" },
+      ],
+      targetDir: "/tmp/test-repo",
+    })
+    expect(preview.steps.length).toBe(1)
+    expect(preview.steps[0].name).toBe("fix-code")
+    expect(preview.estimatedCost).toBeDefined()
+
+    await close()
+  })
 })

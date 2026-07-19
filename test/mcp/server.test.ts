@@ -49,14 +49,14 @@ function parseTextContent(result: { content: any }): any {
 }
 
 describe("MCP server tools/list", () => {
-  test("returns all 22 tools", async () => {
+  test("returns all 23 tools", async () => {
     const { client, close } = await createConnectedPair()
 
     const result = await client.listTools()
     const tools = result.tools
 
     expect(tools).toBeDefined()
-    expect(tools.length).toBe(22)
+    expect(tools.length).toBe(23)
 
     // Verify all expected tool names are present
     const toolNames = tools.map((t: any) => t.name).sort()
@@ -78,6 +78,7 @@ describe("MCP server tools/list", () => {
       "list_pipelines",
       "list_runs",
       "preview_run",
+      "recommend_pipeline",
       "resume_run",
       "set_config",
       "start_run",
@@ -416,6 +417,100 @@ describe("MCP server tools/call", () => {
 
     const content = JSON.parse((result.content[0] as any).text)
     expect(content.code).toBe(-32002)
+
+    await close()
+  })
+
+  test("recommend_pipeline returns named pipeline for implement intent", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "recommend_pipeline", {
+      prompt: "Add a dark mode toggle",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const recommendation = JSON.parse((result.content[0] as any).text)
+    expect(recommendation.kind).toBe("named")
+    expect(recommendation.pipeline).toBe("implement")
+    expect(recommendation.reason).toBeTruthy()
+
+    await close()
+  })
+
+  test("recommend_pipeline returns custom steps for readOnly + high rigor", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "recommend_pipeline", {
+      prompt: "Check for security issues",
+      preferences: { readOnly: true, rigor: "high" },
+    })
+    expect(result.isError).toBeFalsy()
+
+    const recommendation = JSON.parse((result.content[0] as any).text)
+    expect(recommendation.kind).toBe("custom")
+    expect(recommendation.steps.length).toBeGreaterThan(0)
+    expect(recommendation.reason).toBeTruthy()
+
+    await close()
+  })
+
+  test("recommend_pipeline validates prompt is required", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "recommend_pipeline", {})
+    expect(result.isError).toBe(true)
+
+    await close()
+  })
+
+  test("preview_run accepts steps array instead of pipeline", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "preview_run", {
+      prompt: "test",
+      steps: [{ agent: "implementer" }, { agent: "test-engineer" }],
+      targetDir: "/tmp/test-repo",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const preview = JSON.parse((result.content[0] as any).text)
+    expect(preview.steps.length).toBe(2)
+    const stepNames = preview.steps.map((s: any) => s.name)
+    expect(stepNames).toContain("implementer")
+    expect(stepNames).toContain("test-engineer")
+
+    await close()
+  })
+
+  test("estimate_cost accepts steps array instead of pipeline", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "estimate_cost", {
+      prompt: "test",
+      steps: [{ agent: "implementer" }],
+      targetDir: "/tmp/test-repo",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const cost = JSON.parse((result.content[0] as any).text)
+    expect(cost.min).toBeGreaterThanOrEqual(0)
+
+    await close()
+  })
+
+  test("start_run accepts steps array", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "start_run", {
+      prompt: "test",
+      steps: [{ agent: "implementer" }],
+      targetDir: "/dev/null",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const startData = JSON.parse((result.content[0] as any).text)
+    expect(startData.runId).toBeTruthy()
+    expect(startData.status).toBe("started")
 
     await close()
   })
