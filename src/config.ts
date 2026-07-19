@@ -25,6 +25,7 @@ import {
   type StepSpec,
 } from "./pipeline"
 import type { AgentSpec, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
+import { parseNotificationUrl } from "./notifications/parse"
 import { woprHome, woprRoot, globalConfigPath } from "./workspace"
 
 /**
@@ -38,6 +39,7 @@ export type WoprConfig = {
   permissions: PermissionAdditions
   hooks: HooksConfig
   attachments: string[]
+  notifications: NotificationTarget[]
 }
 
 export type WoprDefaults = {
@@ -125,6 +127,8 @@ export function mergeWoprConfigs(global: WoprConfig | undefined, project: WoprCo
     },
     hooks: mergeHooksConfig(global.hooks, project.hooks),
     attachments: [...global.attachments, ...project.attachments],
+    // Project notifications override global ones entirely (like agents/pipelines)
+    notifications: project.notifications.length > 0 ? project.notifications : global.notifications,
   }
 }
 
@@ -243,6 +247,11 @@ permissions:
   allow: []
   deny: []
 
+# Notifications (ntfy only for now). See AGENTS.md for URL format.
+# notifications:
+#   - ntfy://wopr-topic
+#   - ntfy://ntfy.example.com/wopr-team
+
 attachments: []
 `
 
@@ -327,14 +336,14 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
     throw new ConfigError(`${source}: invalid YAML: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  const config: WoprConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [] }
+  const config: WoprConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [], notifications: [] }
   if (raw === null || raw === undefined) return config
 
   const v = new Validator(source)
   const root = v.record(raw, "")
   // Unknown keys warn instead of failing so configs written for a newer
   // wopr still load; typos surface in the warning either way.
-  v.knownKeys(root, "", ["version", "defaults", "agents", "pipelines", "permissions", "hooks", "attachments"])
+  v.knownKeys(root, "", ["version", "defaults", "agents", "pipelines", "permissions", "hooks", "attachments", "notifications"])
 
   if (root.version !== undefined && root.version !== 1) v.fail("version", `unsupported value ${JSON.stringify(root.version)}; this wopr reads version 1`)
 
@@ -344,6 +353,16 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
   if (root.permissions !== undefined) config.permissions = validatePermissions(v, root.permissions)
   if (root.hooks !== undefined) config.hooks = validateHooks(v, root.hooks)
   if (root.attachments !== undefined) config.attachments = v.stringArray(root.attachments, "attachments")
+  if (root.notifications !== undefined) {
+    const rawUrls = v.stringArray(root.notifications, "notifications")
+    config.notifications = rawUrls.map((url) => {
+      try {
+        return parseNotificationUrl(url)
+      } catch (error) {
+        throw new ConfigError(`notifications: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })
+  }
 
   return config
 }
@@ -629,6 +648,16 @@ export function serializeWoprConfig(config: WoprConfig): string {
   const hooks = serializeHooks(config.hooks)
   if (hooks) out.hooks = hooks
   if (config.attachments.length > 0) out.attachments = config.attachments
+  if (config.notifications.length > 0) {
+    // Serialize targets back as URLs for readability
+    out.notifications = config.notifications.map((target) => {
+      if (target.kind !== "ntfy") return ""
+      const authPart = target.auth ? `${target.auth.user}:${target.auth.pass}@` : ""
+      // ntfy.sh is the default server; write the shorthand form when it matches
+      if (target.server === "https://ntfy.sh") return `ntfy://${authPart}${target.topic}`
+      return `ntfy://${authPart}${target.server}/${target.topic}`
+    })
+  }
   return Bun.YAML.stringify(out, null, 2)
 }
 
@@ -671,6 +700,7 @@ export function defaultConfigTemplate(): WoprConfig {
     permissions: { allow: [], deny: [] },
     hooks: emptyHooksConfig(),
     attachments: [],
+    notifications: [],
   }
 }
 

@@ -170,6 +170,8 @@ export type ProgressUI = {
   keepRunDirRequested?(): boolean
   /** Update budget tracking; budget is the cap (optional) and spent is the current total. */
   updateBudget?(budget: { perRun: number; onExceed?: "abort" | "warn-and-continue" }, spent: number): void
+  /** Report whether notifications are configured; the dashboard shows a bell icon. */
+  notificationsActive?(active: boolean): void
   /** Reports the current converge-loop iteration/verdict; the dashboard renders it in the header. */
   loopState?(info: LoopProgress): void
   message(message: string): void

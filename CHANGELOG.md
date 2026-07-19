@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added: Built-in ntfy notifications
+
+- **New module `src/notifications/`.** Typed notification system with pluggable
+  target support (MVP ships ntfy only). Public surface: `NotificationDispatcher`,
+  `parseNotificationUrl`, `sendNotification`, and types.
+- **`wopr --notify <url>`**. Add a notification target for a single run. Repeatable
+  for multiple targets. Use `--no-notify` to clear all targets (even from config).
+- **`wopr notify test [url...]`**. Send a test notification to verify the wiring.
+  Uses configured targets when no URL is given; exits with per-target pass/fail.
+- **Config support.** `notifications:` key in `~/.wopr/config.yaml` and
+  `.wopr/config.yaml`. Project overrides global (not merged).
+- **Event hooks.** The dispatcher fires on `run_started`, `phase_done`,
+  `phase_failed`, `budget_warning`, `budget_exceeded`, `run_completed`, and
+  `run_failed`. Fire-and-forget: never blocks the run.
+- **TUI dashboard.** Shows a `🔔 ntfy` indicator in the header when notifications
+  are active. Config TUI lists notification targets (read-only for now).
+- **Off by default.** No notifications configured = no network I/O.
+- **AGENTS.md §14** documents the notification feature.
+
 ### Added: Core API (`src/core/`)
 
 - **New module `src/core/`.** A typed, callable, awaitable orchestrator surface

@@ -778,6 +778,15 @@ export class ConfigEditor {
     }
     rows.push(actionRow("⊕ add pipeline", { t: "add-pipeline" }))
 
+    rows.push(blankRow(), sectionRow("Notifications  (read-only — edit in .wopr/config.yaml)"))
+    const notifUrls = config.notifications.map((target) => {
+      if (target.kind !== "ntfy") return String(target.kind)
+      const auth = target.auth ? `${target.auth.user}:****@` : ""
+      if (target.server === "https://ntfy.sh") return `ntfy://${auth}${target.topic}`
+      return `ntfy://${auth}${target.server}/${target.topic}`
+    })
+    rows.push(infoRow(readonlyList("targets", notifUrls.length > 0 ? notifUrls : ["none"])))
+
     rows.push(blankRow(), sectionRow("Permissions  (read-only — edit in .wopr/config.yaml)"))
     rows.push(infoRow(readonlyList("allow", config.permissions.allow)))
     rows.push(infoRow(readonlyList("deny", config.permissions.deny)))

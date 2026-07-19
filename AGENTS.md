@@ -477,7 +477,69 @@ In the project's own `.wopr/config.yaml` (dogfooding setup), the defaults are fl
 
 ---
 
-## 14. Core API (`src/core/index.ts`)
+## 14. Notifications (built-in ntfy)
+
+WOPR ships with built-in ntfy notification support. Off by default — no config, no network I/O.
+
+### Quickstart
+
+```bash
+# Send a test notification (verify connectivity)
+wopr notify test ntfy://my-phone-topic
+
+# Run with notifications
+wopr --notify ntfy://my-phone-topic --prompt-file prd.md
+```
+
+### URL format
+
+```
+ntfy://<topic>                              # ntfy.sh (default server)
+ntfy://<server>/<topic>                    # self-hosted, no auth
+ntfy://<user>:<pass>@<server>/<topic>      # self-hosted with auth
+```
+
+### Events and priorities
+
+| Event | When | Priority |
+|---|---|---|
+| `run_started` | Run starts | default |
+| `phase_done` | Phase completes successfully | default |
+| `phase_failed` | Phase fails after all attempts | high |
+| `verdict_received` | Adversarial validator renders a verdict | pass=default, fail=high |
+| `budget_warning` | Run exceeds budget cap (warn mode) | high |
+| `budget_exceeded` | Budget cap hit (abort mode) | urgent |
+| `run_completed` | Pipeline completes successfully | high |
+| `run_failed` | Pipeline fails | urgent |
+
+### Config
+
+```yaml
+# ~/.wopr/config.yaml or .wopr/config.yaml
+notifications:
+  - ntfy://wopr-leo-1234
+  - ntfy://ntfy.example.com/wopr-team
+```
+
+Project config overrides global config (they don't merge). Use `--no-notify` to clear all targets for a single run.
+
+### Failure behavior
+
+- **Per-target failure** (ntfy 5xx, timeout, network error): logged as `warn`, run continues
+- **Per-event failure**: same as per-target — log and move on
+- **Config-time failure** (malformed URL): `ConfigError` at startup
+- **No targets**: dispatcher is a no-op; no network calls
+
+### Limitations (MVP)
+
+- Only ntfy supported (pluggable via the `NotificationTarget` union)
+- No 2-way communication (inbox, replies)
+- No retry with backoff — fire once, log on fail, move on
+- No notification templates / customization
+- No per-agent filtering — every event fires to every target
+- No bidirectional click actions on the ntfy side
+
+## 15. Core API (`src/core/index.ts`)
 
 WOPR ships a typed, callable, awaitable core API at `src/core/index.ts` (re-exported as `@earendil-works/wopr-core` in spirit). Every operation an external agent needs is exposed here as a pure or async function. The MCP server and pi extension are thin transports over this surface; the CLI/TUI also go through it internally.
 

@@ -1,4 +1,5 @@
 import type { EvaluationConfig } from "./evaluate"
+import type { NotificationTarget } from "./notifications/types"
 
 export type Budget = {
   /** Hard cap in USD; the run aborts when spent + next_phase_estimate exceeds this. */
@@ -45,6 +46,8 @@ export type RunOptions = {
   permissions: PermissionAdditions
   /** Shell hooks configured globally and/or per pipeline. */
   hooks: HooksConfig
+  /** Notification targets resolved from config and CLI flags. */
+  notifications: NotificationTarget[]
 }
 
 export type PermissionAdditions = {

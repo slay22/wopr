@@ -4,10 +4,11 @@ import { resolve } from "node:path"
 import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type WoprDefaults } from "./config"
 import { detectBaseRef, initializeRepoWithInitialCommit, repoBootstrapStatus } from "./git"
 import { log } from "./log"
+import { NotificationDispatcher, parseNotificationUrl } from "./notifications"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
-import type { Budget, Pipeline, RunOptions } from "./types"
+import type { Budget, NotificationTarget, Pipeline, RunOptions } from "./types"
 import { isValidRunID } from "./workspace"
 
 /**
@@ -49,6 +50,10 @@ export type ParsedArgs = {
   budgetMode?: string
   /** When --no-budget is passed, the budget is cleared even if set in config. */
   noBudget?: boolean
+  /** Notification URLs from --notify flags. */
+  notify: string[]
+  /** When --no-notify is passed, notifications are cleared even if set in config. */
+  noNotify?: boolean
 }
 
 export type InitOptions = {
@@ -65,6 +70,7 @@ export type CliCommand =
   | { type: "worktrees"; action: "list" | "prune"; force: boolean }
   | { type: "config"; targetDir: string }
   | { type: "init"; options: InitOptions }
+  | { type: "notify-test"; targets: NotificationTarget[]; urls: string[] }
 
 export async function parseAndRun(argv: string[]) {
   if (argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
@@ -89,6 +95,19 @@ export async function parseAndRun(argv: string[]) {
     await openConfigEditor(command.targetDir)
     return
   }
+  if (command.type === "notify-test") {
+    const dispatcher = new NotificationDispatcher(command.targets)
+    const results = await dispatcher.test()
+    for (const r of results) {
+      if (r.ok) {
+        process.stdout.write(`✅ ${r.target.kind === "ntfy" ? r.target.server + "/" + r.target.topic : String(r.target.kind)} — sent\n`)
+      } else {
+        process.stdout.write(`❌ ${r.target.kind === "ntfy" ? r.target.server + "/" + r.target.topic : String(r.target.kind)} — ${r.error ?? "unknown error"}\n`)
+      }
+    }
+    return
+  }
+
   if (command.type === "init") {
     const result = command.options.global
       ? await writeDefaultGlobalConfig(command.options.force)
@@ -227,6 +246,19 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
     if (action !== "list" && action !== "prune") throw new Error("usage: wopr worktrees [list|prune] [--force]")
     return { type: "worktrees", action, force: rest.includes("--force") || rest.includes("-f") }
   }
+  if (argv[0] === "notify") {
+    const rest = argv.slice(1)
+    if (rest[0] !== "test") throw new Error("usage: wopr notify test [url...]")
+    const urls = rest.slice(1)
+    const targets = urls.length > 0
+      ? urls.map((url) => {
+        try { return parseNotificationUrl(url) } catch (e) { throw new Error(`invalid notification URL: ${e instanceof Error ? e.message : String(e)}`) }
+      })
+      : (await loadMergedWoprConfig(process.cwd()))?.notifications ?? []
+    if (targets.length === 0) throw new Error("no notification targets configured; pass a URL or add notifications: to your config")
+    return { type: "notify-test", targets, urls }
+  }
+
   if (argv[0] === "init") {
     const parsed = parseInitArgs(argv.slice(1))
     if (parsed.help) return { type: "help", text: initHelp() }
@@ -410,6 +442,14 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     agents,
     permissions: config?.permissions ?? { allow: [], deny: [] },
     hooks: config?.hooks ?? emptyHooksConfig(),
+    // Notification resolution: --no-notify clears; otherwise --notify flags override config
+    notifications: parsed.noNotify
+      ? []
+      : parsed.notify.length > 0
+        ? parsed.notify.map((url) => {
+          try { return parseNotificationUrl(url) } catch (e) { throw new Error(`invalid notification URL: ${e instanceof Error ? e.message : String(e)}`) }
+        })
+        : config?.notifications ?? [],
   }
 
   // Fast feedback for typos; a resumed run validates again in the runner
@@ -436,6 +476,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     onlySteps: [],
     skipSteps: [],
     targetDir: process.cwd(),
+    notify: [],
   }
   const positional: string[] = []
 
@@ -513,6 +554,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--no-budget":
         parsed.budget = undefined
         parsed.noBudget = true
+        break
+      case "--notify":
+        parsed.notify.push(takeValue())
+        break
+      case "--no-notify":
+        parsed.notify = []
+        parsed.noNotify = true
         break
       case "--budget-mode":
         parsed.budgetMode = takeValue()
@@ -602,6 +650,7 @@ Commands:
   worktrees [list|prune]   List the isolated worktrees --worktree created (under ~/.wopr/worktrees),
                            or prune their checkouts (branches are kept; --force removes dirty ones)
   config                   View and edit the global (~/.wopr) and current project config in a TUI
+  notify test [url...]     Send a test notification (uses configured targets, or explicit URLs)
 
 Flags:
   --prompt-file <path>     Read the PRD/prompt from a file
@@ -624,6 +673,8 @@ Flags:
   --include-dirty          Include existing changes in the first commit (requires --max-attempts 1)
   --budget <usd>           Hard cost cap; run aborts before exceeding this (e.g. --budget 5.00)
   --no-budget              Clear any budget set in the project/global config
+  --notify <url>               Notification target (ntfy://...); repeatable, overrides config
+  --no-notify                  Clear all notification targets (even from config)
   --budget-mode abort|warn Whether to abort (default) or warn-and-continue when the budget is exceeded
   --model <provider/model[#variant]> Force a model for all steps
   --tui                    Show visual phase progress (default in interactive terminals)

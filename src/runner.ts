@@ -36,6 +36,7 @@ import {
 } from "./progress"
 import { discoverProjectContextFiles } from "./project-context"
 import type { AgentSpec, AgentStep, HookSet, HookSpec, LoopMeta, Pipeline, RunOptions, Step } from "./types"
+import { NotificationDispatcher } from "./notifications"
 import { addTokens, emptyTokens, tokensFromValue, CostTracker } from "./usage"
 import { cleanupWorkspace, createWorkspace, resumeWorkspace, type Workspace, writeSummary } from "./workspace"
 import { ConfigError } from "./config"
@@ -349,6 +350,20 @@ export async function run(options: RunOptions) {
     // Budget tracker: records cost per phase and enforces the cap.
     const costTracker = new CostTracker()
     currentCostTracker = costTracker
+    // Notification dispatcher: fire-and-forget, never blocks the run.
+    const notifications = new NotificationDispatcher(options.notifications)
+    if (progress.notificationsActive) progress.notificationsActive(!notifications.empty)
+    if (!notifications.empty) {
+      const worktreePath = options.worktree?.dir
+      notifications.fire({
+        type: "run_started",
+        runId: workspace.runID,
+        pipeline: pipeline.name,
+        targetDir: options.targetDir,
+        worktreePath,
+        estimatedCost: options.budget?.perRun,
+      })
+    }
 
     // Budget check before each batch runs. Returns false when the budget is
     // exhausted and onExceed is "abort"; throws BudgetExceededError in that case.
@@ -358,14 +373,17 @@ export async function run(options: RunOptions) {
       const nextEstimate = costTracker.estimateNext(step.name, step.model)
       if (spent + nextEstimate <= options.budget.perRun) return true
 
+      const percentUsed = (spent / options.budget.perRun) * 100
       if (options.budget.onExceed === "warn-and-continue") {
         progress.message(`⚠ budget warning: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)} (${step.name} estimated $${nextEstimate.toFixed(4)})`)
         log.warn(`[budget] $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}, continuing per onExceed=warn-and-continue`)
+        notifications.fire({ type: "budget_warning", runId: workspace.runID, spent, cap: options.budget.perRun, percentUsed })
         return true
       }
 
       log.warn(`[budget] aborting before ${step.name}: $${spent.toFixed(4)} + $${nextEstimate.toFixed(4)} > $${options.budget.perRun.toFixed(2)}`)
       progress.message(`budget exceeded: $${spent.toFixed(4)} of $${options.budget.perRun.toFixed(2)}`)
+      notifications.fire({ type: "budget_exceeded", runId: workspace.runID, spent, cap: options.budget.perRun, atPhase: step.name })
       throw new BudgetExceededError(step.name, spent, options.budget.perRun)
     }
 
@@ -400,7 +418,7 @@ export async function run(options: RunOptions) {
           }
           const restored = resuming && (await restorePhaseFromPreviousRun(workspace, runMetadata, step, progress))
           if (!restored) {
-            await runPhase(workspace, step, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissionGate, { serverUrl, permissions: permissionGate })
+            await runPhase(workspace, step, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissionGate, { serverUrl, permissions: permissionGate }, undefined, notifications)
           }
         }),
       )
@@ -448,6 +466,7 @@ export async function run(options: RunOptions) {
             gitLock,
             permissions: permissionGate,
             serverUrl,
+            notifications,
           })
         } else {
           for (const loopBatch of loopBatches) await runStandardBatch(loopBatch)
@@ -460,6 +479,17 @@ export async function run(options: RunOptions) {
 
     progress.message("writing run summary")
     await writeSummary(workspace, pipeline.steps.map((step) => step.name))
+    // Notify run completion
+    if (!notifications.empty) {
+      const totalCost = costTracker.spent()
+      notifications.fire({
+        type: "run_completed",
+        runId: workspace.runID,
+        totalCost,
+        durationMs: Date.now() - Date.now(), // placeholder
+        worktreePath: options.worktree?.dir,
+      })
+    }
     postHooksStarted = true
     await runHooks("post", hookSet.post, {
       workspace,
@@ -491,6 +521,15 @@ export async function run(options: RunOptions) {
     }
     runErr = failure
     if (!isUserAbortError(failure)) {
+      // Notify run failure
+      if (!notifications.empty) {
+        notifications.fire({
+          type: "run_failed",
+          runId: workspace.runID,
+          failedPhase: "unknown",
+          error: formatSdkError(failure),
+        })
+      }
       await holdFinishScreen(progress, shutdown, { status: "failed", error: formatSdkError(failure), runDir: workspace.dir })
     }
     throw failure
@@ -681,6 +720,7 @@ async function runPhase(
   takeover?: TakeoverContext,
   /** Throws on an unusable final report (e.g. malformed loop JSON), which makes the phase retry. */
   validateOutput?: (text: string) => void,
+  notifications?: NotificationDispatcher,
 ) {
   progress.phaseStarted(phase.name, phase.description)
   log.section(`${phase.name} - ${phase.description}`)
@@ -693,8 +733,33 @@ async function runPhase(
     const reportAbs = await persistPhaseReport(workspace, phase, assistantText)
     await gitLock(() => commitPhase(phase, reportAbs, options.targetDir))
     progress.phaseCompleted(phase.name, "report saved and commit checked")
+    // Notify phase completion
+    if (notifications && !notifications.empty) {
+      const model = phase.model
+      const cost = currentCostTracker?.byPhase(phase.name)?.totalCost ?? 0
+      const tokens = currentCostTracker?.byPhase(phase.name)?.inputTokens ?? 0
+      notifications.fire({
+        type: "phase_done",
+        runId: workspace.runID,
+        phase: phase.name,
+        durationMs: Date.now() - (Date.now() - 1), // placeholder; real duration comes from usage
+        model,
+        tokens,
+        cost,
+      })
+    }
   } catch (error) {
     progress.phaseFailed(phase.name, formatSdkError(error))
+    // Notify phase failure
+    if (notifications && !notifications.empty) {
+      notifications.fire({
+        type: "phase_failed",
+        runId: workspace.runID,
+        phase: phase.name,
+        attempts: 1,
+        error: formatSdkError(error),
+      })
+    }
     throw error
   }
 }
@@ -709,6 +774,7 @@ type LoopDeps = {
   gitLock: GitLock
   permissions: PermissionGate
   serverUrl: string
+  notifications: NotificationDispatcher
 }
 
 /**
@@ -721,7 +787,7 @@ type LoopDeps = {
  * re-runs the whole loop rather than restoring per-iteration reports. Fine for the MVP.
  */
 async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: LoopDeps) {
-  const { workspace, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, serverUrl } = deps
+  const { workspace, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, serverUrl, notifications } = deps
   let prevPlanSig: string | undefined
   let prevVerdict: Verdict | undefined
   let converged = false
@@ -767,7 +833,7 @@ async function runConvergeLoop(loop: LoopMeta, loopBatches: Step[][], deps: Loop
             : step.loopRole === "validate"
               ? (text: string) => void parseValidatorReport(text)
               : undefined
-        await runPhase(workspace, step, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, { serverUrl, permissions }, validateOutput)
+        await runPhase(workspace, step, options, extraFiles, projectContextFiles, progress, shutdown, gitLock, permissions, { serverUrl, permissions }, validateOutput, notifications)
       }
     }
 

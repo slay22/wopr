@@ -258,6 +258,8 @@ export class TuiProgress implements ProgressUI {
   private budgetCap?: number
   private budgetSpent = 0
   private budgetOnExceed?: "abort" | "warn-and-continue"
+  /** Whether notifications are configured; shows a bell icon in the header. */
+  private notificationsConfigured = false
   private readonly feed: FeedEntry[] = []
   // The live model transcript per phase (the session tab): verbatim reasoning
   // and response text, interleaved with tool/bash action markers. Streamed in
@@ -1017,6 +1019,11 @@ export class TuiProgress implements ProgressUI {
     this.budgetOnExceed = budget.onExceed
   }
 
+  notificationsActive(active: boolean): void {
+    this.notificationsConfigured = active
+    this.render()
+  }
+
   // The focused phase, clamped to a valid index (the pipeline can be empty
   // only in degenerate cases). Shared by rendering and [o].
   private focusedPhase(): PhaseState | undefined {
@@ -1609,6 +1616,9 @@ export class TuiProgress implements ProgressUI {
       ? [fg(theme.faint)("  ·  "), ...budgetBar(this.budgetSpent, this.budgetCap, Math.max(10, Math.floor(width * 0.35)))]
       : []
     title.push(...budgetChunks)
+    if (this.notificationsConfigured) {
+      title.push(fg(theme.faint)("  ·  "), bold(fg(theme.cyan))("🔔 ntfy"))
+    }
     const line1 = padBetween(title, totals, width)
     return this.loop ? joinLines([line1, this.convergeLine()]) : line1
   }
