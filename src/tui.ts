@@ -1622,7 +1622,7 @@ export class TuiProgress implements ProgressUI {
         this.notificationTargets.length === 1 && this.notificationTargets[0]!.kind === "ntfy"
           ? `🔔 ntfy: ${this.notificationTargets[0]!.topic}`
           : `🔔 ntfy ×${this.notificationTargets.length}`
-      title.push(fg(theme.faint)("  ·  "), bold(fg(theme.cyan))(label))
+      title.push(fg(theme.faint)("  ·  "), bold(fg(theme.cyan)(label)))
     }
     const line1 = padBetween(title, totals, width)
     return this.loop ? joinLines([line1, this.convergeLine()]) : line1

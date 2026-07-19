@@ -9,10 +9,10 @@ describe("sendNotification", () => {
 
   beforeEach(() => {
     fetchCalls = []
-    globalThis.fetch = async (url: RequestInfo | URL, options?: RequestInit) => {
+    globalThis.fetch = (async (url: RequestInfo | URL, options?: RequestInit) => {
       fetchCalls.push({ url: String(url), options: options ?? {} })
       return new Response("ok", { status: 200 })
-    }
+    }) as typeof fetch
   })
 
   afterEach(() => {
@@ -95,12 +95,12 @@ describe("sendNotification", () => {
   })
 
   test("throws on non-2xx response", async () => {
-    globalThis.fetch = async () => new Response("unauthorized", { status: 401, statusText: "Unauthorized" })
+    globalThis.fetch = (async () => new Response("unauthorized", { status: 401, statusText: "Unauthorized" })) as unknown as typeof fetch
     expect(sendNotification(target, payload)).rejects.toThrow("ntfy 401")
   })
 
   test("throws on network error", async () => {
-    globalThis.fetch = async () => { throw new Error("fetch failed") }
+    globalThis.fetch = (async () => { throw new Error("fetch failed") }) as unknown as typeof fetch
     expect(sendNotification(target, payload)).rejects.toThrow("fetch failed")
   })
 })

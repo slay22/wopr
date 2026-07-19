@@ -15,10 +15,10 @@ describe("notifications integration", () => {
 
   beforeEach(() => {
     fetchCalls = []
-    globalThis.fetch = async (url: RequestInfo | URL, options?: RequestInit) => {
+    globalThis.fetch = (async (url: RequestInfo | URL, options?: RequestInit) => {
       fetchCalls.push({ url: String(url), options: options ?? {} })
       return new Response("ok", { status: 200 })
-    }
+    }) as unknown as typeof fetch
   })
 
   afterEach(() => {

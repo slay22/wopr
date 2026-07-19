@@ -9,10 +9,10 @@ describe("NotificationDispatcher", () => {
 
   beforeEach(() => {
     fetchCalls = []
-    globalThis.fetch = async (url: RequestInfo | URL, options?: RequestInit) => {
+    globalThis.fetch = (async (url: RequestInfo | URL, options?: RequestInit) => {
       fetchCalls.push({ url: String(url), options: options ?? {} })
       return new Response("ok", { status: 200 })
-    }
+    }) as unknown as typeof fetch
   })
 
   afterEach(() => {
@@ -55,7 +55,7 @@ describe("NotificationDispatcher", () => {
   })
 
   test("test() returns per-target results on failure", async () => {
-    globalThis.fetch = async () => { throw new Error("network error") }
+    globalThis.fetch = (async () => { throw new Error("network error") }) as unknown as typeof fetch
     const dispatcher = new NotificationDispatcher([target])
     const results = await dispatcher.test()
     expect(results.length).toBe(1)

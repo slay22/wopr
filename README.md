@@ -2,7 +2,7 @@
   <img src="assets/header.svg" alt="wopr" width="820">
 </p>
 
-<p align="center"><em>A self-correcting orchestration harness for multi-model agent pipelines.</em></p>
+<p align="center"><em>A self-correcting orchestration harness for multi-model agent pipelines — with a typed core API, an MCP server, and per-run cost caps.</em></p>
 
 <p align="center">
   <img src="assets/screenshot.png" alt="the WOPR TUI mid-run: a NORAD phosphor big board showing a parallel review group (patterns, security, design) running concurrently, with the pipeline panel, DEFCON meter, and per-agent session feeds" width="960">
@@ -19,9 +19,24 @@ Typical uses:
 - **Harden a branch you already have** — hand-written, or another agent's output. `wopr -p refine "what this branch does"` audits the current diff (scope, bugs, clean code, security), triages the findings adversarially, applies only the accepted fixes, and validates them.
 - **Get a second opinion before merging.** `wopr -p review "pre-merge check"` changes no code: each audit runs in parallel on two different models and everything is synthesized into one prioritized findings report at `reports/report.md`.
 - **Turn up the rigor for risky changes.** `ultra-implement` and `ultra-refine` fan every review out across two models, then finish with a fixer that applies only blocking findings and a final validator.
+- **Cap the cost of a run.** `wopr --budget 5.00 --prompt-file prd.md` aborts cleanly if the run would exceed $5. Configurable per-run, per-pipeline, or globally in `.wopr/config.yaml`. The TUI shows a live budget meter alongside the DEFCON meter.
+- **Get phone notifications on every phase.** `wopr --notify ntfy://wopr-leo-1234 --prompt-file prd.md` pings your phone (or a self-hosted ntfy server) when each phase finishes and on the validator's verdict. Off by default; opt in per-run or via config.
+- **Drive wopr from another coding agent.** `wopr mcp` starts an [MCP](https://modelcontextprotocol.io/) server (stdio transport) that exposes 22 tools over the typed core API. Claude Code, Cursor, Codex, and Continue can call `start_run`, `get_run_status`, `suggest_config_for_budget`, `preview_run`, and 18 more — zero shell, zero `wopr` subprocess.
 - **Encode your team's actual workflow.** Pipelines are YAML in `.wopr/config.yaml`: define, say, a `ship` pipeline — refine the branch, sync it with its base, draft the PR — and run `wopr -p ship`.
 
 Use it as a **CLI** or as a **TUI**, interchangeably: every run can be launched with plain flags and prompt files (`--no-tui` gives you plain logs for pipes and CI), or driven entirely from the TUI — `wopr` with no arguments opens the interactive launcher, every run gets a live dashboard, `wopr runs` browses past runs, and `wopr config` edits global and project config in place.
+
+### Three surfaces
+
+WOPR is reachable from three places, sharing the same engine and the same per-run worktree:
+
+| Surface | Use it from | When |
+|---|---|---|
+| **CLI / TUI** | `wopr` shell command, or the interactive launcher | You (the human) are driving the run. Flags, prompt files, the dashboard, the runs browser. |
+| **MCP server** | `wopr mcp` — 22 tools over [Model Context Protocol](https://modelcontextprotocol.io/) stdio | Another coding agent (Claude Code, Cursor, Codex, Continue) calls wopr programmatically. Zero shell, zero subprocess. |
+| **Typed core API** | `import { startRun, listPipelines, suggestConfigForBudget } from "src/core"` | You build a custom transport, a pi extension, an IDE plugin, or anything else. The same functions the MCP server wraps. |
+
+Each surface is a thin layer over the same engine. The CLI/TUI don't go through the MCP server; the MCP server doesn't go through the CLI — both consume the core API directly.
 
 **Pipelines are data, not code.** WOPR ships a family of built-ins (see [Built-in pipelines](#built-in-pipelines)) and a project can define its own in `.wopr/config.yaml` — any number of steps, its own agents and models, named human gates anywhere. Beyond sequencing agents, it owns the operational layer: repo-context attachment, a live permission gate, commit safety, phase reports, diff tracking, and the NORAD-styled TUI. It's written in Bun + TypeScript and drives [pi](https://github.com/earendil-works/pi) in-process — no separate server or subprocess, each phase a fresh pi agent session wired to WOPR's permission gate, attachments, and model catalog.
 
@@ -89,6 +104,142 @@ WOPR ships these pipelines; select one with `-p/--pipeline` (no config needed). 
 | `review-lite` | **no — report only** | Same as `review`, but the scope step and first audit model drop to a lower-cost model; the second parallel audit model and the final report stay on the high-end default. |
 
 `refine`/`ultra-refine` are the change-applying counterparts of `review`: run `review` first to get a report, then `refine` if you want the fixes applied.
+
+## The MCP server (`wopr mcp`)
+
+`wopr mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io/) server that speaks stdio JSON-RPC and exposes **22 tools** over the typed core API. Once installed, an agent in Claude Code, Cursor, Codex, or Continue can drive wopr end-to-end without shelling out.
+
+### Install
+
+In your agent's MCP config (e.g. `~/.config/claude-code/.mcp.json`, `~/.cursor/mcp.json`, or `~/.codex/config.toml`):
+
+```json
+{
+  "mcpServers": {
+    "wopr": {
+      "command": "wopr",
+      "args": ["mcp"],
+      "cwd": "/Users/me/myapp"
+    }
+  }
+}
+```
+
+Restart the agent. It will discover the 22 `wopr_*` tools automatically. See [`docs/mcp-installation.md`](docs/mcp-installation.md) for ready-to-use snippets per agent.
+
+### The 22 tools (at a glance)
+
+| Category | Tools |
+|---|---|
+| Discovery | `list_pipelines`, `describe_pipeline`, `list_agents`, `describe_agent`, `list_models`, `describe_model` |
+| Config | `get_config`, `validate_config`, `diff_config`, `set_config` |
+| Planning | `preview_run`, `estimate_cost`, `suggest_config_for_budget` |
+| Runs | `start_run`, `get_run_status`, `list_runs`, `get_run_report`, `get_run_cost`, `get_run_diff`, `get_run_commits`, `cancel_run`, `resume_run` |
+
+Each tool maps 1:1 to a function in `src/core/` (the core API). The full signatures and example flows are in [`AGENTS.md`](AGENTS.md) §14 and §15.
+
+### Worked example (Claude Code)
+
+> "Use wopr to add a dark mode toggle. I have $2 to spend."
+
+Claude Code (now armed with the 22 tools) calls them in sequence: `list_pipelines` → `list_models` → `suggest_config_for_budget` → `preview_run` → narrate the plan → user approves → `start_run` → poll `get_run_status` → read `get_run_report` for the verdict → `get_run_cost` and `get_run_diff` for the summary. Zero `wopr` shell calls, zero subprocesses, full state in the model context. The MCP transport is one of several over the same core API — a pi extension does the same thing for pi, a CLI wrapper does it for humans.
+
+## Notifications (`--notify`)
+
+WOPR can ping you on your phone when each phase of a long run finishes, when the validator renders a verdict, and when the run is complete. The transport is [ntfy](https://ntfy.sh) — free, no account, push notifications work on Android and iOS.
+
+### Setup
+
+```bash
+# 1. install "ntfy" on your phone (Play Store / App Store, by Philipp C. Heckel)
+# 2. in the app, subscribe to a topic (e.g. "wopr-leo-1234")
+# 3. verify the wiring before a long run
+wopr notify test ntfy://wopr-leo-1234
+# → "✅ ntfy.sh/wopr-leo-1234 — sent"
+# → check your phone, see the test notification
+
+# 4. use it
+wopr --notify ntfy://wopr-leo-1234 --prompt-file prd.md
+```
+
+### Events
+
+WOPR fires one notification per event, with priority set by importance:
+
+| Event | Priority | Example title |
+|---|---|---|
+| `run_started` | default | "wopr · run started" |
+| `phase_done` | default | "wopr · implementer done" |
+| `phase_failed` (after retries) | high | "wopr · security failed" |
+| `verdict_received` | high | "wopr · validator: PASS" |
+| `budget_warning` (80% of cap) | high | "wopr · 80% of budget used" |
+| `budget_exceeded` | urgent | "wopr · budget exceeded, run aborted" |
+| `run_completed` | high | "wopr · run complete" |
+| `run_failed` | high | "wopr · run failed" |
+
+### Config
+
+Persistent, in `~/.wopr/config.yaml`:
+
+```yaml
+notifications:
+  - ntfy://wopr-leo-1234
+  - ntfy://ntfy.example.com/wopr-team   # self-hosted
+  # future providers (deferred): telegram://, discord://, slack://, pushover://
+```
+
+CLI flags override config:
+
+```bash
+wopr --notify ntfy://run-only --prompt-file prd.md
+wopr --no-notify --prompt-file prd.md   # clear all targets
+```
+
+**Off by default.** No `notifications:` in config and no `--notify` flag means no network calls. If ntfy is unreachable, WOPR logs a warning and continues — notifications are operational, never load-bearing.
+
+## Budgets (`--budget`)
+
+WOPR can cap the cost of a run. The cap fires when a phase would push `spent + next_estimate` above the limit; the run aborts cleanly with a clear `BudgetExceededError` if the cap is hit. Off by default — runs without a budget behave exactly as before, except that `metadata.json` now records the actual cost in every run.
+
+### Per-run
+
+```bash
+wopr --budget 5.00 --prompt-file prd.md   # hard cap at $5
+wopr --budget 5.00 --budget-mode warn --prompt-file prd.md  # soft cap (warn, don't stop)
+```
+
+### Per-project (config)
+
+```yaml
+# ~/.wopr/config.yaml or .wopr/config.yaml
+defaults:
+  budget:
+    perRun: 5.00
+    onExceed: abort  # or "warn-and-continue"
+
+pipelines:
+  converge:
+    budget:
+      perRun: 15.00  # converge is allowed to spend more (self-correcting loop)
+```
+
+Precedence: `--budget` CLI flag > `pipelines.<name>.budget` > `defaults.budget` > none.
+
+### MVP caveats
+
+Cost estimation is naive (constant token assumption per phase). Enforcement is **post-hoc**: the cap fires *after* `spent` already exceeds `perRun`, allowing up to one phase of overshoot. For multi-phase pipelines this is fine; for a single-phase pipeline the cap is essentially a no-op. A future "calibration" PRD closes this gap with per-agent historical token averages.
+
+The TUI shows a budget bar alongside the DEFCON meter:
+
+```
+PIPELINE: implement  CONVERGE 2/3 · verdict ✗ REJECT  BUDGET $1.23/$5.00 (24%)  DEFCON ▲ 3
+```
+
+Past run costs are always visible in `wopr runs` and the runs browser.
+
+## For coding agents
+
+If you're a coding agent reading this: there's a separate manual for you. **[AGENTS.md](AGENTS.md)** is an operational guide — how to invoke wopr, how to pick a pipeline, how to choose models, how to read results, what to avoid. It's structured to be useful to an LLM (concrete commands, decision tables, anti-patterns). Read it on first use; jump to the section you need after that.
 
 ## Requirements
 
@@ -500,9 +651,18 @@ bun run build
 wopr/
 ├── src/
 │   ├── main.ts          # entrypoint
-│   ├── cli.ts           # flag parsing
-│   ├── runner.ts        # pipeline orchestration
+│   ├── cli.ts           # flag parsing, subcommand dispatch
+│   ├── runner.ts        # pipeline orchestration, event hooks (notifications, metrics)
 │   ├── pi.ts            # pi runtime: model registry, auth, per-phase agent session
+│   ├── core/            # typed core API for agent integrations (22 exported functions)
+│   │   ├── discovery.ts   # listPipelines, listAgents, listModels, …
+│   │   ├── config.ts      # getConfig, setConfig, validateConfig, diffConfig
+│   │   ├── planning.ts    # previewRun, estimateCost, suggestConfigForBudget
+│   │   ├── runs.ts        # startRun, getRunStatus, getRunReport, cancelRun, …
+│   │   ├── errors.ts      # typed errors (ConfigError, RunNotFoundError, …)
+│   │   └── index.ts       # barrel
+│   ├── mcp/             # wopr mcp — 22-tool MCP server (stdio, JSON-RPC)
+│   ├── notifications/   # --notify flag, wopr notify test, ntfy client + dispatcher
 │   ├── loop.ts          # converge-loop control: plan signature, verdict progress, stall detection
 │   ├── evaluate.ts      # optional evaluation gate: install/build/test/run between iterations
 │   ├── plan-schema.ts   # typed Plan / Verdict parsing for the converge loop
@@ -518,10 +678,19 @@ wopr/
 │   ├── metadata.ts      # per-run metadata.json: frozen pipeline + --resume restore
 │   ├── config.ts        # config loader/validation, global+project merge, YAML writer
 │   ├── config-tui.ts    # interactive config editor (wopr config)
+│   ├── cost.ts          # naive cost estimation: rate × tokens
+│   ├── suggest.ts       # suggestConfigForBudget: pick a config that fits a budget
+│   ├── usage.ts         # CostTracker, PhaseUsage, token aggregation
 │   ├── model-catalog.ts # available-model list via pi's registry, models.dev fallback
 │   └── pipeline.ts      # built-in agents/pipeline and pipeline-spec resolution
 ├── prompts/             # built-in agent prompts and runtime safety guard rails
-├── test/                # unit tests for CLI/orchestration
+├── docs/                # mcp-installation.md and other agent-facing docs
+├── test/                # unit + integration tests
+│   ├── core/            # tests for the core API
+│   ├── mcp/             # tests for the MCP server
+│   └── notifications/   # tests for the notifications module
+├── AGENTS.md            # operational manual for coding agents
+├── CHANGELOG.md         # release notes
 ├── package.json
 ├── tsconfig.json
 └── Makefile

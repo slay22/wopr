@@ -8,7 +8,8 @@ import { NotificationDispatcher, parseNotificationUrl } from "./notifications"
 import { defaultGptModel, defaultGptVariant, defaultPipeline, defaultPipelineName, resolvePipeline, splitModelVariant, validateStepFilters } from "./pipeline"
 import { parseModel, run } from "./runner"
 import { browseRuns } from "./runs"
-import type { Budget, NotificationTarget, Pipeline, RunOptions } from "./types"
+import type { Budget, Pipeline, RunOptions } from "./types"
+import type { NotificationTarget } from "./notifications/types"
 import { isValidRunID } from "./workspace"
 
 /**

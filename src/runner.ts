@@ -273,6 +273,9 @@ export async function run(options: RunOptions) {
   // cli.ts always resolves a concrete model string (--smart-model → config →
   // --model → defaults.model), so smart mode never lacks a judge.
   const judgeModel = parseModel(splitModelVariant(options.smartJudgeModel).model)
+  // Notification dispatcher: declared outside the try so the catch block can
+  // see it regardless of where the try failed.
+  const notifications = new NotificationDispatcher(options.notifications)
 
   try {
     metadata = await openRunMetadata(workspace, options.targetDir, options.pipeline)
@@ -353,7 +356,8 @@ export async function run(options: RunOptions) {
     const costTracker = new CostTracker()
     currentCostTracker = costTracker
     // Notification dispatcher: fire-and-forget, never blocks the run.
-    const notifications = new NotificationDispatcher(options.notifications)
+    // (Declared outside the try block so the catch can see it.)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     if (progress.notificationsActive) progress.notificationsActive(notifications.targets)
     if (!notifications.empty) {
       const worktreePath = options.worktree?.dir
@@ -524,7 +528,7 @@ export async function run(options: RunOptions) {
     runErr = failure
     if (!isUserAbortError(failure)) {
       // Notify run failure
-      if (!notifications.empty) {
+      if (notifications && !notifications.empty) {
         notifications.fire({
           type: "run_failed",
           runId: workspace.runID,
@@ -759,7 +763,7 @@ async function runPhase(
         type: "phase_failed",
         runId: workspace.runID,
         phase: phase.name,
-        attempts: prepared.maxAttempts,
+        attempts: phase.maxAttempts ?? options.maxAttempts,
         error: formatSdkError(error),
       })
     }

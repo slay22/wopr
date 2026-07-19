@@ -3,6 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import { projectAgentPromptPath } from "./agents"
+import type { NotificationTarget } from "./notifications/types"
 import { builtInPrompts } from "./built-in-prompts"
 import { log } from "./log"
 import {
