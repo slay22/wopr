@@ -1,5 +1,4 @@
 import { getConfig, validateConfig, diffConfig, setConfig } from "../../core"
-import { serializeError } from "../errors"
 import type { ToolHandler } from "./index"
 
 // ─── Tool handlers ──────────────────────────────────────────────────────────

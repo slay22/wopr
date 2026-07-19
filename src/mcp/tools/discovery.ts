@@ -1,5 +1,4 @@
 import { listPipelines, describePipeline, listAgents, describeAgent, listModels, describeModel } from "../../core"
-import { serializeError } from "../errors"
 import type { ToolHandler } from "./index"
 
 // ─── Tool handlers ──────────────────────────────────────────────────────────
