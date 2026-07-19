@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { execSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 
 import { readRunMetadata } from "../metadata"
 import { listRuns as listRunEntries, type RunEntry } from "../runs"
@@ -172,6 +172,15 @@ function updateRegistryStatus(runId: string, status: RunStatus): void {
   }
 }
 
+/** Phase names are used to build report file paths; restrict them to a safe charset. */
+const phaseNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
+function validatePhaseName(phase: string): void {
+  if (!phaseNamePattern.test(phase)) {
+    throw new Error(`invalid phase name: ${phase}`)
+  }
+}
+
 // ─── Status polling ─────────────────────────────────────────────────────────
 
 export function getRunStatus(runId: string): RunStatus {
@@ -277,6 +286,7 @@ export async function listRunsAsync(filter?: { targetDir?: string; since?: numbe
 
 export async function getRunReport(runId: string, phase: string): Promise<RunReport> {
   const dir = runDir(runId)
+  validatePhaseName(phase)
   const reportPath = join(dir, "reports", `${phase}.md`)
 
   let markdown = ""
@@ -371,9 +381,9 @@ export async function getRunDiff(runId: string, against: "base" | "previous" = "
       commitCount: filesChanged.length > 0 ? 1 : 0,
     }
   } catch {
-    // No diffs directory; try git log
+    // No diffs directory; try git log via a non-shell child process.
     try {
-      const output = execSync(`cd "${dir}" && git rev-list --count HEAD`, { encoding: "utf8" }).trim()
+      const output = (spawnSync("git", ["rev-list", "--count", "HEAD"], { cwd: dir, encoding: "utf8" }).stdout ?? "").trim()
       const commitCount = parseInt(output, 10) || 0
       return { filesChanged: [], totalAdditions: 0, totalDeletions: 0, commitCount }
     } catch {
@@ -388,10 +398,11 @@ export async function getRunCommits(runId: string): Promise<RunCommitInfo[]> {
   const dir = runDir(runId)
 
   try {
-    const output = execSync(
-      `cd "${dir}" && git log --format="%H|||%s|||%an|||%ct" --reverse`,
-      { encoding: "utf8", maxBuffer: 1024 * 1024 },
-    )
+    const output = spawnSync(
+      "git",
+      ["log", "--format=%H|||%s|||%an|||%ct", "--reverse"],
+      { cwd: dir, encoding: "utf8", maxBuffer: 1024 * 1024 },
+    ).stdout ?? ""
     const lines = output.trim().split("\n").filter(Boolean)
     return lines.map((line: string) => {
       const parts = line.split("|||")

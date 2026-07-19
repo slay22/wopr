@@ -9,6 +9,7 @@ import {
   estimateCost,
   suggestConfigForBudget,
   validateConfig,
+  getRunReport,
   RunNotFoundError,
 } from "../../src/core"
 
@@ -155,5 +156,18 @@ describe("core API integration", () => {
     // But the actual count depends on how the pipeline resolves
     expect(implementPreview.steps.length).toBeGreaterThanOrEqual(6)
     expect(refinePreview.steps.length).toBeGreaterThanOrEqual(6)
+  })
+
+  test("getRunReport rejects path-traversal phase names", async () => {
+    // The `phase` argument is used to build a report file path. A
+    // caller-supplied traversal name must be rejected before any file read.
+    await expect(
+      getRunReport("20240101-000000-aaaa", "../../../../etc/passwd"),
+    ).rejects.toThrow(/invalid phase name/)
+
+    // Only safe identifiers are accepted.
+    await expect(
+      getRunReport("20240101-000000-aaaa", "adversarial"),
+    ).rejects.toThrow() // run doesn't exist, but phase name is valid
   })
 })
