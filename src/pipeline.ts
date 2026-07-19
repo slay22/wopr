@@ -603,6 +603,15 @@ function resolveAgentStepSpec(raw: string | AgentStepSpec, ctx: ResolveStepConte
   }
 
   const baseName = spec.name ?? spec.agent
+  // The step name is used verbatim to build filesystem paths (reportPath,
+  // reportInputs). Reject anything outside the safe charset so a caller can't
+  // craft a name that escapes the run's reports directory (e.g. "../x").
+  // Mirrors the phaseNamePattern validation in core/runs.ts.
+  if (spec.name !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(spec.name)) {
+    throw new Error(
+      `pipeline "${ctx.input.name}": step ${ctx.position} name "${spec.name}" is invalid; use only letters, digits, dashes, and underscores`,
+    )
+  }
   if (spec.models !== undefined && spec.model !== undefined) {
     throw new Error(`pipeline "${ctx.input.name}": step ${ctx.position} ("${baseName}") can't set both "model" and "models"`)
   }
