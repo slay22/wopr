@@ -7,8 +7,6 @@ import { readRunMetadata, type RunMetadata } from "../metadata"
 import { listRuns as listRunEntries, type RunEntry } from "../runs"
 import { BudgetExceededError, isUserAbortError } from "../runner"
 import { newRunID, runDir, runsRoot, isValidRunID } from "../workspace"
-import type { StepSpec } from "../pipeline"
-
 import { RunRegistry } from "./_internal"
 import { RunNotFoundError } from "./errors"
 import type { RunHandle, RunInput, RunReport, RunStatus, RunCostDetail, RunDiff, RunCommitInfo } from "./types"
@@ -144,7 +142,7 @@ function parseArgsFromInput(input: RunInput): import("../cli").ParsedArgs {
     files: input.files ?? [],
     onlySteps: input.onlySteps ?? [],
     skipSteps: input.skipSteps ?? [],
-    steps: input.steps as StepSpec[] | undefined,
+    steps: input.steps,
     resumeRunID: (input as any).resumeRunID ?? "",
     keepRunDir: input.keepRunDir ?? true,
     modelOverride: input.modelOverride ?? "",

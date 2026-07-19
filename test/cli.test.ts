@@ -169,6 +169,20 @@ describe("cli parsing", () => {
     expect(parsed.noNotify).toBe(true)
   })
 
+  test("parses --steps flag", () => {
+    const parsed = parseArgs(["--steps", "implementer,tests", "prompt"])
+    expect(parsed.steps).toBeDefined()
+    expect(parsed.steps!.length).toBe(2)
+    expect(parsed.steps![0]).toEqual({ agent: "implementer" })
+    expect(parsed.steps![1]).toEqual({ agent: "tests" })
+  })
+
+  test("--steps and --pipeline are mutually exclusive", async () => {
+    await expect(parseCommand(["--steps", "implementer", "--pipeline", "review", "prompt"])).rejects.toThrow(
+      "mutually exclusive",
+    )
+  })
+
   test("parses the notify test subcommand", async () => {
     const cmd = await parseCommand(["notify", "test", "ntfy://wopr-test"])
     expect(cmd.type).toBe("notify-test")

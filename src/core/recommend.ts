@@ -32,7 +32,7 @@ const intentGroups: IntentGroup[] = [
     named: "review",
     customPreferred: (input) => input.preferences?.readOnly === true,
     buildCustom: () => [
-      { agent: "review-scope" },
+      "review-scope",
       "clean-code-auditor",
       "security-reviewer",
       "bug-auditor",
@@ -70,7 +70,12 @@ export function recommendPipeline(input: RecommendPipelineInput): PipelineRecomm
     if (prefs.rigor === "high") {
       return {
         kind: "custom",
-        steps: ["review-scope", "security-reviewer", "adversarial-reviewer", "review-report"],
+        steps: [
+          "review-scope",
+          "security-reviewer",
+          "adversarial-reviewer",
+          "review-report",
+        ],
         reason: "read-only review with high rigor: custom audit pipeline",
       }
     }

@@ -120,15 +120,13 @@ describe("recommendPipeline", () => {
     expect(result.pipeline).toBe("implement-lite")
   })
 
-  test("returns review for changeExisting (no explicit rigor)", () => {
-    // Wait: changeExisting without readOnly and without "fix issues" keywords
-    // falls through to keyword matching. "review" is not triggered. Let's use
-    // "what's wrong" which triggers review:
+  test("changeExisting at standard rigor returns refine", () => {
+    // changeExisting: true without high rigor or readOnly returns
+    // the named refine pipeline directly (step 2 in recommendPipeline).
     const result = recommendPipeline({
-      prompt: "What's wrong with this code?",
+      prompt: "Fix the codebase",
       preferences: { changeExisting: true },
     })
-    // "what's wrong" matches the review intent group
     expect(result.kind).toBe("named")
     expect(result.pipeline).toBe("refine")
   })
