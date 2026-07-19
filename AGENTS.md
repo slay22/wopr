@@ -659,6 +659,12 @@ The agent calls (programmatically):
 7. `get_run_report` to read the adversarial validator's verdict
 8. `get_run_cost` to confirm the total stayed under budget
 
+### Installing in your agent
+
+See [`docs/mcp-installation.md`](./docs/mcp-installation.md) for ready-to-use
+`.mcp.json` / `.cursor/mcp.json` / Codex `config.toml` snippets for
+Claude Code, Cursor, and Codex.
+
 ## 16. One last thing
 
 WOPR is a **draft generator**, not a final-answer machine. Every output needs human review before it ships to a real codebase. The pipeline's job is to do the 80% — the boring implementation, the standard patterns, the obvious tests — so the human can spend their attention on the 20% that matters: is the architecture right, are the tradeoffs the right ones, does this actually solve the user's problem.

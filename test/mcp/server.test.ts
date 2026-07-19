@@ -275,8 +275,13 @@ describe("MCP server tools/call", () => {
     expect(result.isError).toBeFalsy()
 
     const diff = parseTextContent(result)
-    expect(diff).toBeDefined()
-    expect(diff.valid === false || Array.isArray(diff.errors) || true).toBe(true)
+    expect(diff.ok).toBe(true)
+    expect(diff.scope).toBe("project")
+    expect(typeof diff.before).toBe("string")
+    expect(typeof diff.after).toBe("string")
+    expect(Array.isArray(diff.added)).toBe(true)
+    expect(Array.isArray(diff.removed)).toBe(true)
+    expect(Array.isArray(diff.changed)).toBe(true)
 
     await close()
   })

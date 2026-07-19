@@ -4,9 +4,6 @@ import { handleMcpSubcommand } from "../../src/mcp/cli"
 
 describe("handleMcpSubcommand", () => {
   test("--version prints version and MCP server ready", async () => {
-    const lines: string[] = []
-    const spy = Bun.spawnSync(["true"]) // just to get a reference
-
     // Capture stdout
     const origWrite = process.stdout.write.bind(process.stdout)
     const chunks: string[] = []
