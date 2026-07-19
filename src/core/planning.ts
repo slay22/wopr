@@ -3,6 +3,9 @@ import { buildAgentRegistry as buildAgentRegistryFromConfig } from "../config"
 import { builtInPipelines, resolvePipeline } from "../pipeline"
 import { suggestConfigForBudget as suggestConfig, type BudgetSuggestion } from "../suggest"
 
+import { newRunID } from "../workspace"
+import type { AgentStep } from "../types"
+
 import type { RunInput, RunPreview, CostEstimate } from "./types"
 
 export { type BudgetSuggestion }
@@ -26,7 +29,7 @@ export function previewRun(input: RunInput): RunPreview {
 
   // Get step info
   const steps = pipeline.steps
-    .filter((s): s is import("../types").AgentStep => s.type === "agent")
+    .filter((s): s is AgentStep => s.type === "agent")
     .map((s) => ({
       name: s.name,
       agentName: s.agentName,
@@ -52,8 +55,8 @@ export function previewRun(input: RunInput): RunPreview {
     ),
   }
 
-  // Generate a run ID (same format as workspace.ts)
-  const runId = generateRunId()
+  // Generate a run ID
+  const runId = newRunID()
 
   // Collect warnings
   const warnings: string[] = []
@@ -81,7 +84,7 @@ export function estimateCost(input: RunInput): CostEstimate {
   const pipeline = resolvePipeline({ name: pipelineName, spec, agents })
 
   const steps = pipeline.steps
-    .filter((s): s is import("../types").AgentStep => s.type === "agent")
+    .filter((s): s is AgentStep => s.type === "agent")
     .map((s) => ({ name: s.name, model: s.model + (s.variant ? `#${s.variant}` : "") }))
 
   const estimated = estimateRunCost(steps, defaultTokenEstimate)
@@ -103,15 +106,3 @@ export function estimateCost(input: RunInput): CostEstimate {
  * Delegate to suggest.ts's suggestConfigForBudget with the right types.
  */
 export { suggestConfig as suggestConfigForBudget }
-
-function generateRunId(): string {
-  const now = new Date()
-  const pad = (value: number) => String(value).padStart(2, "0")
-  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
-  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-  let slug = ""
-  const bytes = crypto.getRandomValues(new Uint8Array(4))
-  for (const byte of bytes) slug += chars[byte % chars.length]
-  return `${date}-${time}-${slug}`
-}

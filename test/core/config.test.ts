@@ -1,20 +1,20 @@
-import { describe, it, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import { validateConfig, diffConfig, setConfig } from "../../src/core/config"
 import { parseWoprConfig, serializeWoprConfig } from "../../src/config"
 
 describe("validateConfig", () => {
-  it("returns ok for valid minimal YAML", () => {
+  test("returns ok for valid minimal YAML", () => {
     const result = validateConfig("version: 1\n")
     expect(result.ok).toBe(true)
   })
 
-  it("returns ok for empty YAML", () => {
+  test("returns ok for empty YAML", () => {
     const result = validateConfig("")
     expect(result.ok).toBe(true)
   })
 
-  it("returns ok for full config", () => {
+  test("returns ok for full config", () => {
     const yaml = `version: 1
 defaults:
   model: openai/gpt-5.6-terra#xhigh
@@ -24,7 +24,7 @@ defaults:
     expect(result.ok).toBe(true)
   })
 
-  it("returns errors for truly invalid YAML", () => {
+  test("returns errors for truly invalid YAML", () => {
     // The parseWoprConfig function tolerates most YAML; but a config with a
     // non-mapping root is still valid YAML. This test verifies the plumbing.
     const result = validateConfig("  invalid: [}")
@@ -32,7 +32,7 @@ defaults:
     expect(typeof result.ok).toBe("boolean")
   })
 
-  it("returns errors for invalid model", () => {
+  test("returns errors for invalid model", () => {
     const yaml = `version: 1
 agents:
   test-agent:
@@ -47,7 +47,7 @@ agents:
 })
 
 describe("diffConfig", () => {
-  it("returns errors for invalid proposed YAML", () => {
+  test("returns errors for invalid proposed YAML", () => {
     const result = diffConfig("project", "{invalid}")
     // The result will always be an error type since {invalid} is invalid YAML
     if (!result.ok) {
@@ -55,7 +55,7 @@ describe("diffConfig", () => {
     }
   })
 
-  it("returns a diff structure for valid YAML", () => {
+  test("returns a diff structure for valid YAML", () => {
     const result = diffConfig("project", "version: 1\n")
     if (result.ok === false) {
       // It's an error type; this can happen if there's no existing config
@@ -70,7 +70,7 @@ describe("diffConfig", () => {
 })
 
 describe("setConfig", () => {
-  it("validateOnly returns ok without writing", async () => {
+  test("validateOnly returns ok without writing", async () => {
     const result: { ok: true; path: string } | { ok: false; errors: string[] } = await setConfig("project", "version: 1\n", { validateOnly: true })
     expect(result.ok).toBe(true)
     if (result.ok) {
@@ -78,7 +78,7 @@ describe("setConfig", () => {
     }
   })
 
-  it("returns errors for invalid YAML", async () => {
+  test("returns errors for invalid YAML", async () => {
     const result = await setConfig("project", "invalid: [}", { validateOnly: true })
     // The result may be ok:false if validation catches it, or ok:true if tolerated
     expect("ok" in result).toBe(true)
@@ -86,7 +86,7 @@ describe("setConfig", () => {
 })
 
 describe("serializeWoprConfig", () => {
-  it("serializes and deserializes round-trip", () => {
+  test("serializes and deserializes round-trip", () => {
     const config = {
       version: 1,
       defaults: { model: "openai/gpt-5.6-terra#xhigh", maxAttempts: 2 },

@@ -95,7 +95,7 @@ function validateRunID(runID: string) {
 }
 
 // Local time, not UTC: run IDs are read by humans next to their wall clock.
-function newRunID() {
+export function newRunID() {
   const now = new Date()
   const pad = (value: number) => String(value).padStart(2, "0")
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`

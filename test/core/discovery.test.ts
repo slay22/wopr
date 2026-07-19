@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import {
   listPipelines,
@@ -12,7 +12,7 @@ import { builtInPipelines } from "../../src/pipeline"
 import { builtInAgents } from "../../src/pipeline"
 
 describe("listPipelines", () => {
-  it("returns 8 built-in pipelines", () => {
+  test("returns 8 built-in pipelines", () => {
     const pipelines = listPipelines()
     expect(pipelines.length).toBeGreaterThanOrEqual(8)
     const names = pipelines.map((p) => p.name)
@@ -26,7 +26,7 @@ describe("listPipelines", () => {
     expect(names).toContain("converge")
   })
 
-  it("marks implement as built-in with correct step count", () => {
+  test("marks implement as built-in with correct step count", () => {
     const pipelines = listPipelines()
     const implement = pipelines.find((p) => p.name === "implement")
     expect(implement).toBeDefined()
@@ -35,7 +35,7 @@ describe("listPipelines", () => {
     expect(implement!.hasLoops).toBe(false)
   })
 
-  it("marks converge as having loops", () => {
+  test("marks converge as having loops", () => {
     const pipelines = listPipelines()
     const converge = pipelines.find((p) => p.name === "converge")
     expect(converge).toBeDefined()
@@ -44,7 +44,7 @@ describe("listPipelines", () => {
 })
 
 describe("describePipeline", () => {
-  it("returns detailed info for implement", () => {
+  test("returns detailed info for implement", () => {
     const detail = describePipeline("implement")
     expect(detail.name).toBe("implement")
     expect(detail.steps.length).toBeGreaterThan(0)
@@ -53,7 +53,7 @@ describe("describePipeline", () => {
     expect(detail.steps[0]!.readOnly).toBe(false)
   })
 
-  it("returns readOnly flags", () => {
+  test("returns readOnly flags", () => {
     // Review pipeline has only read-only steps (report-only)
     const detail = describePipeline("review")
     for (const step of detail.steps) {
@@ -61,13 +61,13 @@ describe("describePipeline", () => {
     }
   })
 
-  it("throws for unknown pipeline", () => {
+  test("throws for unknown pipeline", () => {
     expect(() => describePipeline("non-existent")).toThrow()
   })
 })
 
 describe("listAgents", () => {
-  it("returns all built-in agents", () => {
+  test("returns all built-in agents", () => {
     const agents = listAgents()
     expect(agents.length).toBeGreaterThanOrEqual(builtInAgents.length)
     const names = agents.map((a) => a.name)
@@ -81,7 +81,7 @@ describe("listAgents", () => {
 })
 
 describe("describeAgent", () => {
-  it("returns detail for implementer", () => {
+  test("returns detail for implementer", () => {
     const detail = describeAgent("implementer")
     expect(detail.name).toBe("implementer")
     expect(detail.description).toBeTruthy()
@@ -89,18 +89,18 @@ describe("describeAgent", () => {
     expect(detail.readOnly).toBe(false)
   })
 
-  it("throws for unknown agent", () => {
+  test("throws for unknown agent", () => {
     expect(() => describeAgent("non-existent")).toThrow()
   })
 })
 
 describe("listModels", () => {
-  it("returns an array (may be empty if no catalog)", () => {
+  test("returns an array (may be empty if no catalog)", () => {
     const models = listModels()
     expect(Array.isArray(models)).toBe(true)
   })
 
-  it("filter freeOnly returns only free models", () => {
+  test("filter freeOnly returns only free models", () => {
     const freeModels = listModels({ freeOnly: true })
     for (const m of freeModels) {
       expect(m.cost.input).toBe(0)
@@ -110,7 +110,7 @@ describe("listModels", () => {
 })
 
 describe("describeModel", () => {
-  it("throws for an unknown model", () => {
+  test("throws for an unknown model", () => {
     expect(() => describeModel("nonexistent-provider/nonexistent-model")).toThrow()
   })
 })

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import {
   listPipelines,
@@ -13,7 +13,7 @@ import {
 } from "../../src/core"
 
 describe("core API integration", () => {
-  it("discovers pipelines and agents", () => {
+  test("discovers pipelines and agents", () => {
     // Discovery: the full chain
     const pipelines = listPipelines()
     expect(pipelines.length).toBeGreaterThanOrEqual(8)
@@ -26,7 +26,7 @@ describe("core API integration", () => {
     expect(agents.find((a) => a.name === "implementer")).toBeDefined()
   })
 
-  it("previews a run without creating a workspace", () => {
+  test("previews a run without creating a workspace", () => {
     // Planning: the full preview chain
     const preview = previewRun({
       prompt: "Add a feature",
@@ -43,7 +43,7 @@ describe("core API integration", () => {
     expect(preview.estimatedCost.byModel).toBeDefined()
   })
 
-  it("estimates cost for multiple pipelines", () => {
+  test("estimates cost for multiple pipelines", () => {
     // Cost estimation across pipelines
     const pipelines = ["implement", "implement-lite", "review", "refine"]
 
@@ -60,7 +60,7 @@ describe("core API integration", () => {
     }
   })
 
-  it("suggests config within budget", () => {
+  test("suggests config within budget", () => {
     // Budget suggestion
     const suggestion = suggestConfigForBudget({
       budget: 5.0,
@@ -75,7 +75,7 @@ describe("core API integration", () => {
     expect(suggestion.fitsBudget).toBe(true)
   })
 
-  it("suggests free-only config when budget is tight", () => {
+  test("suggests free-only config when budget is tight", () => {
     const suggestion = suggestConfigForBudget({
       budget: 0.01,
       pipeline: "implement",
@@ -87,7 +87,7 @@ describe("core API integration", () => {
     expect(suggestion.cheapestFittingTier).toBe("free-only")
   })
 
-  it("validates config YAML", () => {
+  test("validates config YAML", () => {
     // Config validation
     const valid = validateConfig("version: 1\ndefaults:\n  maxAttempts: 5\n")
     expect(valid.ok).toBe(true)
@@ -97,7 +97,7 @@ describe("core API integration", () => {
     expect("ok" in invalid).toBe(true)
   })
 
-  it("models can be listed", () => {
+  test("models can be listed", () => {
     const models = listModels()
     expect(Array.isArray(models)).toBe(true)
 
@@ -114,7 +114,7 @@ describe("core API integration", () => {
     }
   })
 
-  it("RunNotFoundError has correct properties", () => {
+  test("RunNotFoundError has correct properties", () => {
     const error = new RunNotFoundError("test-run-123")
     expect(error.name).toBe("RunNotFoundError")
     expect(error.message).toContain("test-run-123")
@@ -125,7 +125,7 @@ describe("core API integration", () => {
     expect(roundTripped.message).toBe(error.message)
   })
 
-  it("previewRun returns readOnly flags correctly", () => {
+  test("previewRun returns readOnly flags correctly", () => {
     const preview = previewRun({
       prompt: "review",
       pipeline: "review",
@@ -138,7 +138,7 @@ describe("core API integration", () => {
     }
   })
 
-  it("previewRun reflects pipeline stepCount", () => {
+  test("previewRun reflects pipeline stepCount", () => {
     const implementPreview = previewRun({
       prompt: "test",
       pipeline: "implement",

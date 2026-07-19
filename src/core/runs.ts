@@ -5,7 +5,7 @@ import { execSync } from "node:child_process"
 import { readRunMetadata } from "../metadata"
 import { listRuns as listRunEntries, type RunEntry } from "../runs"
 import { BudgetExceededError, isUserAbortError } from "../runner"
-import { runDir } from "../workspace"
+import { newRunID, runDir } from "../workspace"
 
 import { RunRegistry } from "./_internal"
 import { RunNotFoundError } from "./errors"
@@ -16,7 +16,7 @@ import type { RunHandle, RunInput, RunReport, RunStatus, RunCostDetail, RunDiff,
  * The run executes in a background task; await handle.promise to block.
  */
 export function startRun(input: RunInput): RunHandle {
-  const runId = generateRunId()
+  const runId = newRunID()
   const startedAt = Date.now()
   const registry = RunRegistry.instance()
   const controller = new AbortController()
@@ -41,12 +41,11 @@ export function startRun(input: RunInput): RunHandle {
 
   // Kick off the pipeline execution in the background
   runBackground(input, runId, controller.signal, resolveStatus).catch(() => {
-    // Ensure the promise always resolves, even on unexpected errors
-    if (!promiseResolved(promise)) {
-      const reg = registry.get(runId)
-      if (reg) registry.unregister(runId)
-      resolveStatus({ state: "failed", startedAt, finishedAt: Date.now(), error: "internal error", failedPhase: "" })
-    }
+    // Ensure the promise always resolves, even on unexpected errors.
+    // Calling resolveStatus on an already-settled promise is a no-op.
+    const reg = registry.get(runId)
+    if (reg) registry.unregister(runId)
+    resolveStatus({ state: "failed", startedAt, finishedAt: Date.now(), error: "internal error", failedPhase: "" })
   })
 
   return {
@@ -171,31 +170,6 @@ function updateRegistryStatus(runId: string, status: RunStatus): void {
   if (reg) {
     reg.status = status
   }
-}
-
-/** Generate a run ID in the same format as workspace.ts. */
-function generateRunId(): string {
-  const now = new Date()
-  const pad = (value: number) => String(value).padStart(2, "0")
-  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
-  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-  let slug = ""
-  const bytes = crypto.getRandomValues(new Uint8Array(4))
-  for (const byte of bytes) slug += chars[byte % chars.length]
-  return `${date}-${time}-${slug}`
-}
-
-/** Check if a promise has settled (simple heuristic). */
-function promiseResolved(p: Promise<unknown>): boolean {
-  // There's no synchronous promise state check in JS.
-  // We use a trick: wrap in another promise and track.
-  let settled = false
-  void p.then(
-    () => { settled = true },
-    () => { settled = true },
-  )
-  return settled
 }
 
 // ─── Status polling ─────────────────────────────────────────────────────────

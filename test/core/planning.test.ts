@@ -1,9 +1,9 @@
-import { describe, it, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import { previewRun, estimateCost, suggestConfigForBudget } from "../../src/core/planning"
 
 describe("previewRun", () => {
-  it("returns a complete RunPreview for the implement pipeline", () => {
+  test("returns a complete RunPreview for the implement pipeline", () => {
     const preview = previewRun({
       prompt: "Add dark mode toggle",
       pipeline: "implement",
@@ -21,7 +21,7 @@ describe("previewRun", () => {
     expect(stepNames).toContain("implementer")
   })
 
-  it("returns cost estimates for each step", () => {
+  test("returns cost estimates for each step", () => {
     const preview = previewRun({
       prompt: "Add tests",
       pipeline: "refine",
@@ -34,7 +34,7 @@ describe("previewRun", () => {
     expect(preview.estimatedCost.expected).toBeGreaterThan(0)
   })
 
-  it("throws for unknown pipeline", () => {
+  test("throws for unknown pipeline", () => {
     expect(() =>
       previewRun({
         prompt: "test",
@@ -44,7 +44,7 @@ describe("previewRun", () => {
     ).toThrow()
   })
 
-  it("returns readOnly status for each step", () => {
+  test("returns readOnly status for each step", () => {
     const preview = previewRun({
       prompt: "Review only",
       pipeline: "review",
@@ -58,7 +58,7 @@ describe("previewRun", () => {
 })
 
 describe("estimateCost", () => {
-  it("returns a cost estimate", () => {
+  test("returns a cost estimate", () => {
     const cost = estimateCost({
       prompt: "test",
       pipeline: "implement",
@@ -73,7 +73,7 @@ describe("estimateCost", () => {
 })
 
 describe("suggestConfigForBudget", () => {
-  it("returns a suggestion that fits the budget", () => {
+  test("returns a suggestion that fits the budget", () => {
     const suggestion = suggestConfigForBudget({
       budget: 10.0,
       pipeline: "implement",
@@ -86,7 +86,7 @@ describe("suggestConfigForBudget", () => {
     expect(suggestion.proposed).toBeDefined()
   })
 
-  it("works with no preferences", () => {
+  test("works with no preferences", () => {
     const suggestion = suggestConfigForBudget({
       budget: 5.0,
       pipeline: "implement",

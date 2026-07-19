@@ -1,7 +1,7 @@
 import { buildAgentRegistry } from "../config"
 import { loadModelCatalog, type ModelCatalog } from "../cost"
 import { builtInAgents, builtInPipelines, resolvePipeline, splitModelVariant } from "../pipeline"
-import type { AgentSpec, Step } from "../types"
+import type { AgentSpec, AgentStep, Step } from "../types"
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ export function describePipeline(name: string, targetDir?: string): PipelineDeta
     hasLoops: pipeline.steps.some((s: Step) => s.type === "agent" && s.loopId !== undefined),
     hasParallel: false, // groups are collapsed in the flat step list
     steps: pipeline.steps
-      .filter((s: Step): s is import("../types").AgentStep => s.type === "agent")
+      .filter((s: Step): s is AgentStep => s.type === "agent")
       .map((s) => ({
         name: s.name,
         agentName: s.agentName,
