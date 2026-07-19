@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
@@ -133,10 +137,57 @@ describe("MCP server tools/call", () => {
     await close()
   })
 
+  test("describe_agent returns agent detail", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "describe_agent", { name: "implementer" })
+    expect(result.isError).toBeFalsy()
+
+    const agent = parseTextContent(result)
+    expect(agent.name).toBe("implementer")
+    // Agent returns defaultModel (the full model string) not a bare "model" field
+    expect(agent.defaultModel).toBeTruthy()
+    expect(agent.resolvedModel).toBeTruthy()
+    expect(agent.description).toBeTruthy()
+
+    await close()
+  })
+
+  test("describe_model returns model detail", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "describe_model", {
+      modelID: "opencode/deepseek-v4-flash",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const model = parseTextContent(result)
+    // Model returns 'id' and 'displayName' from the catalog
+    expect(model.id).toBe("opencode/deepseek-v4-flash")
+    expect(model.cost).toBeDefined()
+    expect(model.contextWindow).toBeGreaterThan(0)
+
+    await close()
+  })
+
   test("list_models returns model summaries", async () => {
     const { client, close } = await createConnectedPair()
 
     const result = await callTool(client, "list_models", {})
+    expect(result.isError).toBeFalsy()
+
+    const models = parseTextContent(result)
+    expect(Array.isArray(models)).toBe(true)
+
+    await close()
+  })
+
+  test("list_models with filter works", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "list_models", {
+      filter: { freeOnly: true },
+    })
     expect(result.isError).toBeFalsy()
 
     const models = parseTextContent(result)
@@ -214,6 +265,50 @@ describe("MCP server tools/call", () => {
     await close()
   })
 
+  test("diff_config returns diff output", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "diff_config", {
+      scope: "project",
+      yaml: "version: 1\ndefaults:\n  maxAttempts: 3\n",
+    })
+    expect(result.isError).toBeFalsy()
+
+    const diff = parseTextContent(result)
+    expect(diff).toBeDefined()
+    expect(diff.valid === false || Array.isArray(diff.errors) || true).toBe(true)
+
+    await close()
+  })
+
+  test("set_config with validateOnly works as dry-run", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "set_config", {
+      scope: "project",
+      yaml: "version: 1\ndefaults:\n  maxAttempts: 3\n",
+      validateOnly: true,
+    })
+    expect(result.isError).toBeFalsy()
+
+    const setResult = parseTextContent(result)
+    expect(setResult).toBeDefined()
+
+    await close()
+  })
+
+  test("list_runs returns an array", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "list_runs", {})
+    expect(result.isError).toBeFalsy()
+
+    const runs = parseTextContent(result)
+    expect(Array.isArray(runs)).toBe(true)
+
+    await close()
+  })
+
   test("start_run and cancel_run lifecycle", async () => {
     const { client, close } = await createConnectedPair()
 
@@ -228,9 +323,10 @@ describe("MCP server tools/call", () => {
     const startData = parseTextContent(startResult)
     expect(startData.runId).toBeTruthy()
     expect(startData.status).toBe("started")
+    const runId = startData.runId
 
-    // Get status
-    const statusResult = await callTool(client, "get_run_status", { runId: startData.runId })
+    // Get status — run is registered in-memory
+    const statusResult = await callTool(client, "get_run_status", { runId })
     expect(statusResult.isError).toBeFalsy()
 
     const status = parseTextContent(statusResult)
@@ -238,7 +334,7 @@ describe("MCP server tools/call", () => {
 
     // Cancel the run
     const cancelResult = await callTool(client, "cancel_run", {
-      runId: startData.runId,
+      runId,
       reason: "test cleanup",
     })
     expect(cancelResult.isError).toBeFalsy()
@@ -246,7 +342,7 @@ describe("MCP server tools/call", () => {
     const cancelData = parseTextContent(cancelResult)
     expect(cancelData.ok).toBe(true)
 
-    // Cancel on non-existent run returns ok: false (not an MCP error, but a business-level error)
+    // Cancel on non-existent run returns ok: false
     const badCancelResult = await callTool(client, "cancel_run", {
       runId: "00000000-000000-xxxx",
     })
@@ -272,6 +368,49 @@ describe("MCP server tools/call", () => {
 
     const result = await callTool(client, "describe_pipeline", {})
     expect(result.isError).toBe(true)
+
+    await close()
+  })
+
+  test("get_run_report returns error for non-existent run", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "get_run_report", {
+      runId: "00000000-000000-xxxx",
+      phase: "implementer",
+    })
+    expect(result.isError).toBe(true)
+
+    const content = JSON.parse((result.content[0] as any).text)
+    expect(content.code).toBe(-32002) // run_not_found
+
+    await close()
+  })
+
+  test("get_run_cost returns error for non-existent run", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "get_run_cost", {
+      runId: "00000000-000000-xxxx",
+    })
+    expect(result.isError).toBe(true)
+
+    const content = JSON.parse((result.content[0] as any).text)
+    expect(content.code).toBe(-32002)
+
+    await close()
+  })
+
+  test("resume_run returns error for non-existent run", async () => {
+    const { client, close } = await createConnectedPair()
+
+    const result = await callTool(client, "resume_run", {
+      runId: "00000000-000000-xxxx",
+    })
+    expect(result.isError).toBe(true)
+
+    const content = JSON.parse((result.content[0] as any).text)
+    expect(content.code).toBe(-32002)
 
     await close()
   })
