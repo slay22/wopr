@@ -6,7 +6,8 @@
 
 ## In flight
 
-- **Dynamic pipelines + `recommendPipeline`** (custom `steps` in `startRun` / `previewRun` / `estimateCost`, a heuristic `recommendPipeline` that returns named or custom, `--steps` CLI flag, MCP `recommend_pipeline` tool) — currently running wopr on `/tmp/spec-dynamic-pipelines.md`. ~30-60 min wall clock. When it lands, the agent can compose pipelines from individual agents instead of picking from the 8 fixed built-ins, and the 8 → 3 fixed-pipeline collapse becomes possible.
+- **Pi extension** (`/tmp/spec-pi-extension.md`) — paused. Hit `FreeUsageLimitError` on the opencode free-tier models mid-implementer. Resume when the free tier resets.
+- **Remote permissions** (`/tmp/spec-remote-permissions.md`) — paused. Same as above. Both runs killed cleanly; no commits in worktrees (implementer was still in exploration phase). Run dirs preserved at `~/.wopr/runs/20260719-200106-*`.
 
 ## Parked
 
@@ -20,6 +21,7 @@
 ### Cost & budget
 
 - **Calibration PRD** — `CostTracker.estimateNext` uses a constant `defaultTokenEstimate`. After ~20-30 real runs, we'd have data to learn per-agent averages via EMA. The notifications ADR noted this as the closest "MVP caveats" gap. Closes the post-hoc enforcement gap (currently up to 1 phase of overshoot). Medium effort.
+- **Free-tier rate-limit retry strategy** — when an opencode free-tier model returns `FreeUsageLimitError` (the user's `deepseek-v4-flash-free` or `hy3-free`), the runner should: (a) log the failure, (b) wait + retry with exponential backoff, (c) after N attempts, fall back to a paid model if `budget` allows, (d) after M total attempts, fail the phase with a clear error. Currently the error is propagated up and the run dies. Small-medium effort. The dogfooding today hit this — two parallel runs on free-tier pushed past the daily cap.
 - **LLM-driven cost prediction** — same direction, but the heuristic is replaced with a small model call. The keyword-based `recommendPipeline` could go the same way. Small effort, but requires picking the model.
 - **Per-phase budgets** (`Budget.perPhase`) — the type is already in the codebase; the enforcer ignores it. Add per-phase enforcement. Small effort.
 
