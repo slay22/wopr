@@ -32,13 +32,11 @@ describe("wopr-for-pi tools — smoke tests against core API", () => {
   test("describe_model returns model details", async () => {
     // This may fail if pi's model registry doesn't have the model
     // We just verify the tool can be called without throwing
-    try {
-      const detail = await findAndExecute("describe_model", {
-        modelID: "opencode/deepseek-v4-flash",
-      })
+    const detail = await findAndExecute("describe_model", {
+      modelID: "opencode/deepseek-v4-flash",
+    }).catch(() => null)
+    if (detail !== null) {
       expect(detail).toBeDefined()
-    } catch {
-      // Model might not be in the registry; that's OK
     }
   })
 
@@ -52,6 +50,23 @@ describe("wopr-for-pi tools — smoke tests against core API", () => {
       yaml: "version: 1\ndefaults:\n  maxAttempts: 3\n",
     })
     expect(result.ok).toBe(true)
+  })
+
+  test("diff_config returns diff", async () => {
+    const diff = await findAndExecute("diff_config", {
+      scope: "project",
+      yaml: "version: 1\ndefaults:\n  maxAttempts: 3\n",
+    })
+    expect(diff).toBeDefined()
+  })
+
+  test("set_config with validateOnly works", async () => {
+    const result = await findAndExecute("set_config", {
+      scope: "project",
+      yaml: "version: 1\ndefaults:\n  maxAttempts: 3\n",
+      validateOnly: true,
+    })
+    expect(result).toBeDefined()
   })
 
   test("preview_run returns a preview structure", async () => {
@@ -87,6 +102,44 @@ describe("wopr-for-pi tools — smoke tests against core API", () => {
     expect(suggestion.estimatedCost).toBeDefined()
   })
 
+  test("recommend_pipeline returns named pipeline for feature work", async () => {
+    const rec = await findAndExecute("recommend_pipeline", {
+      prompt: "Add a dark mode toggle to the Flutter app",
+    })
+    expect(rec.kind).toBe("named")
+    expect(rec.pipeline).toBe("implement")
+    expect(rec.reason).toBeTruthy()
+  })
+
+  test("recommend_pipeline returns custom steps for security audit", async () => {
+    const rec = await findAndExecute("recommend_pipeline", {
+      prompt: "Check the auth module for security issues",
+      preferences: { readOnly: true, rigor: "high" },
+    })
+    expect(rec.kind).toBe("custom")
+    expect(Array.isArray(rec.steps)).toBe(true)
+    expect(rec.steps.length).toBeGreaterThan(0)
+  })
+
+  test("list_runs returns an array", async () => {
+    const runs = await findAndExecute("list_runs")
+    expect(Array.isArray(runs)).toBe(true)
+  })
+
+  test("get_run_commits returns an empty array for non-existent run", async () => {
+    const commits = await findAndExecute("get_run_commits", {
+      runId: "00000000-000000-xxxx",
+    })
+    expect(Array.isArray(commits)).toBe(true)
+    expect(commits.length).toBe(0)
+  })
+
+  test("resume_run on non-existent run throws", async () => {
+    await expect(
+      findAndExecute("resume_run", { runId: "00000000-000000-xxxx" }),
+    ).rejects.toThrow(/not found/)
+  })
+
   test("start -> cancel lifecycle", async () => {
     // start_run
     const startResult = await findAndExecute("start_run", {
@@ -108,24 +161,18 @@ describe("wopr-for-pi tools — smoke tests against core API", () => {
   })
 
   test("run query tools handle non-existent runs gracefully", async () => {
-    // get_run_report on non-existent run
-    try {
-      await findAndExecute("get_run_report", {
+    // get_run_report on non-existent run throws
+    await expect(
+      findAndExecute("get_run_report", {
         runId: "00000000-000000-xxxx",
         phase: "implementer",
-      })
-      // Should have thrown
-      expect(true).toBe(false)
-    } catch (e: any) {
-      expect(e.message).toContain("not found")
-    }
+      }),
+    ).rejects.toThrow(/not found/)
 
-    // get_run_cost on non-existent run
-    try {
-      await findAndExecute("get_run_cost", { runId: "00000000-000000-xxxx" })
-    } catch (e: any) {
-      expect(e.message).toContain("not found")
-    }
+    // get_run_cost on non-existent run throws
+    await expect(
+      findAndExecute("get_run_cost", { runId: "00000000-000000-xxxx" }),
+    ).rejects.toThrow(/not found/)
 
     // get_run_diff on non-existent run returns empty diff, not an error
     const diffResult = await findAndExecute("get_run_diff", {
@@ -133,6 +180,13 @@ describe("wopr-for-pi tools — smoke tests against core API", () => {
     })
     expect(diffResult).toBeDefined()
     expect(Array.isArray(diffResult.filesChanged)).toBe(true)
+
+    // cancel_run on non-existent run returns ok:false, not an error
+    const cancelResult = await findAndExecute("cancel_run", {
+      runId: "00000000-000000-xxxx",
+    })
+    expect(cancelResult.ok).toBe(false)
+    expect(cancelResult.error).toContain("not found")
   })
 })
 
