@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import { parseReply } from "../../src/permissions/remote"
 import type { NtfyReply } from "../../src/notifications/inbox"

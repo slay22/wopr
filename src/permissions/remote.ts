@@ -1,19 +1,7 @@
 import { sendNotification } from "../notifications/ntfy"
 import { readInboxSince, type NtfyReply } from "../notifications/inbox"
-import type { NtfyTarget } from "../notifications/types"
 import { AlwaysAllowStore } from "./always-allow"
-
-/**
- * Configuration for remote permission approvals via ntfy.
- */
-export type ApprovalsConfig = {
-  /** The ntfy topic the user sends approval replies to. */
-  topic: NtfyTarget
-  /** How long to wait for the user's reply before timing out. Default: 300 (5 min). */
-  timeoutSeconds: number
-  /** What to do on timeout. Default: "reject". */
-  onTimeout: "reject" | "allow-once"
-}
+import type { ApprovalsConfig } from "../types"
 
 /**
  * A single permission approval request sent to the user.

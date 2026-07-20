@@ -8,8 +8,8 @@ import { log } from "./log"
 import type { ModelSelection } from "./pi"
 import { noopProgress, type AutoAccept, type PermissionPromptInfo, type PermissionReply, type ProgressUI } from "./progress"
 import { judgeCommand } from "./safety-judge"
-import type { PermissionAdditions } from "./types"
-import { askRemote, type ApprovalsConfig } from "./permissions/remote"
+import type { ApprovalsConfig, PermissionAdditions } from "./types"
+import { askRemote } from "./permissions/remote"
 import { AlwaysAllowStore } from "./permissions/always-allow"
 
 // On OpenCode this was a directory-scoped event listener replying to

@@ -25,8 +25,7 @@ import {
   type PipelineSpec,
   type StepSpec,
 } from "./pipeline"
-import type { ApprovalsConfig } from "./permissions/remote"
-import type { AgentSpec, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
+import type { AgentSpec, ApprovalsConfig, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
 import { parseNotificationUrl } from "./notifications/parse"
 import type { NtfyTarget } from "./notifications/types"
 import { woprHome, woprRoot, globalConfigPath } from "./workspace"
