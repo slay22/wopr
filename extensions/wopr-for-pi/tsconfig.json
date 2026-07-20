@@ -9,5 +9,5 @@
     "noEmit": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "extensions/**/*.ts", "extensions/**/*.md"]
+  "include": ["**/*.ts", "../../src/markdown.d.ts"]
 }

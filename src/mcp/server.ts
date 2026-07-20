@@ -5,7 +5,7 @@ import { registerAllTools } from "./tools/index"
 import { log } from "../log"
 
 /**
- * Create a configured MCP server with all 22 tools registered.
+ * Create a configured MCP server with all 23 tools registered.
  * Does not connect to a transport — call startMcpServer() for that.
  */
 export function createMcpServer(): Server {

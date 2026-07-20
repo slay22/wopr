@@ -3,10 +3,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { startMcpServer } from "./server"
-import { discoveryToolDefs, configToolDefs, planningToolDefs, runsToolDefs } from "./tools/index"
-
-/** All tool definitions. */
-const allToolDefs = [...discoveryToolDefs, ...configToolDefs, ...planningToolDefs, ...runsToolDefs]
+import { allToolDefs } from "../core/tools"
 
 /** Version read from package.json. */
 let _version: string | undefined

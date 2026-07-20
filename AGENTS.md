@@ -775,6 +775,47 @@ See [`docs/mcp-installation.md`](./docs/mcp-installation.md) for ready-to-use
 `.mcp.json` / `.cursor/mcp.json` / Codex `config.toml` snippets for
 Claude Code, Cursor, and Codex.
 
+## 16.5 Pi extension (`extensions/wopr-for-pi/`)
+
+The same 23 tools are available as a [pi](https://github.com/earendil-works/pi)
+native extension. Instead of MCP/JSON-RPC, the extension registers each tool
+directly with pi's `ExtensionAPI.registerTool()` — tools are part of the same
+pi process, no subprocess, no JSON-RPC.
+
+### Install
+
+```bash
+# From the wopr repo root
+pi extensions install ./extensions/wopr-for-pi
+
+# Or from anywhere
+pi extensions install /path/to/wopr/extensions/wopr-for-pi
+```
+
+### Tool surface
+
+All 23 tools share the same schemas and behavior as the MCP server's tools; pi adds a `wopr_` prefix to each name. The extension registers them as
+`wopr_list_pipelines`, `wopr_start_run`, etc., and the bundled `skill.md` teaches pi when and how to call them.
+
+### The skill
+
+The extension ships a `skill.md` that pi loads into context. It teaches pi
+*when* to use wopr tools (multi-step implementation, quality-sensitive work)
+and *how* to compose them (the natural sequence of discover → plan → preview
+→ start → poll → report).
+
+### When to use it
+
+Use the pi extension when you're inside a `pi` session and want to drive wopr
+without shelling out. The tools are request/response; poll `get_run_status`
+for async progress.
+
+### Shared source
+
+Both the MCP server and the pi extension consume tool definitions from
+`src/core/tools/`. Adding a tool to that directory makes it available on
+both transports automatically.
+
 ## 17. Composing pipelines dynamically
 
 Instead of picking a named pipeline, you can pass a custom `steps` array.

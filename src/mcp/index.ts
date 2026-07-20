@@ -1,7 +1,7 @@
 /**
  * wopr MCP server module.
  *
- * Exposes the 22-tool MCP server wrapping the core API.
+ * Exposes the 23-tool MCP server wrapping the core API.
  * The server communicates via stdio (JSON-RPC 2.0).
  *
  * @module

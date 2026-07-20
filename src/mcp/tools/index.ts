@@ -2,47 +2,37 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 
-import { discoveryHandlers, discoveryToolDefs } from "./discovery"
-import { configHandlers, configToolDefs } from "./config"
-import { planningHandlers, planningToolDefs } from "./planning"
-import { runsHandlers, runsToolDefs } from "./runs"
+import { allToolDefs } from "../../core/tools"
 import { serializeError } from "../errors"
 
-/**
- * A tool handler: receives the raw args and returns a JSON-serializable
- * result (will be wrapped in a text content block).
- */
-export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
-
-/** All tool definitions (used for tools/list). */
-const allToolDefs = [...discoveryToolDefs, ...configToolDefs, ...planningToolDefs, ...runsToolDefs]
-
-/** Map of tool name → handler. */
-const allHandlers: Record<string, ToolHandler> = {
-  ...discoveryHandlers,
-  ...configHandlers,
-  ...planningHandlers,
-  ...runsHandlers,
+/** Map of tool name → handler, built from the shared tool definitions. */
+const handlersByName: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {}
+for (const def of allToolDefs) {
+  handlersByName[def.name] = def.execute
 }
 
-/** Re-export tool defs for the CLI's --list-tools flag. */
-export { discoveryToolDefs, configToolDefs, planningToolDefs, runsToolDefs }
-
 /**
- * Register all 22 tools on the MCP server.
+ * Register all 23 tools on the MCP server.
  * Handles tools/list and tools/call requests.
  */
 export function registerAllTools(server: Server): void {
+  // Build the MCP tool definitions from the shared source
+  const mcpToolDefs = allToolDefs.map((def) => ({
+    name: def.name,
+    description: def.description,
+    inputSchema: def.inputSchema,
+  }))
+
   // tools/list: return the list of all tools with their schemas
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: allToolDefs }
+    return { tools: mcpToolDefs }
   })
 
   // tools/call: dispatch to the right handler
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const { name, arguments: args } = request.params
 
-    const handler = allHandlers[name]
+    const handler = handlersByName[name]
     if (!handler) {
       return {
         isError: true,
