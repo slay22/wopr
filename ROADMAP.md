@@ -6,8 +6,15 @@
 
 ## In flight
 
-- **Pi extension** (`/tmp/spec-pi-extension.md`) — paused. Hit `FreeUsageLimitError` on the opencode free-tier models mid-implementer. Resume when the free tier resets.
-- **Remote permissions** (`/tmp/spec-remote-permissions.md`) — paused. Same as above. Both runs killed cleanly; no commits in worktrees (implementer was still in exploration phase). Run dirs preserved at `~/.wopr/runs/20260719-200106-*`.
+_(none — v0.2.0 release prep is the next step)_
+
+## Next: v0.2.0 release prep
+
+In the order below, all small follow-ups:
+
+1. **History rewrite** — find the pivot commit (`8418739` is the first WOPR commit, where archer → WOPR happened) and graft it as the new root. Use `git replace --graft`, then `git filter-branch` to materialize. Force-push. Keep a `legacy-archer` branch for the old history.
+2. **CI/CD** — `.github/workflows/ci.yml` (PR: typecheck + tests), `.github/workflows/release.yml` (tag push `v*`: build 4 binaries, attach to release). Plus `install.sh` for `curl | bash` install.
+3. **Cut `v0.2.0`** — first release from the rewritten history. Stable now: core API, MCP, notifications, dynamic pipelines, pi extension, remote permissions, ROADMAP, report command next.
 
 ## Parked
 
@@ -73,3 +80,7 @@
 - **Budgets MVP** (`Budget` type, `CostTracker`, naive `estimateCost`, `suggestConfigForBudget`, `--budget` flag, `BudgetExceededError`, TUI meter) — landed in 5f01d0d. The dogfooding target for wopr-on-wopr.
 - **`.gitignore` cleanup** — build artifacts (`.bun-build`, `wopr` binary) no longer tracked. Landed in 253cfe9.
 - **"Use --yolo for unattended runs"** in AGENTS.md §5 — landed in cd25bb0.
+- **Dynamic pipelines** (custom `steps` in `startRun` / `previewRun` / `estimateCost`, `recommendPipeline` core + MCP tool, `--steps` CLI flag, `*-lite` deprecation) — landed in e07262a. 588 tests pass.
+- **ROADMAP.md** — living document for parked ideas. 20+ items across 8 categories. Landed in f33c263.
+- **Pi extension** (`extensions/wopr-for-pi/`, 22 tools wrapping the core API, hand-written JSON Schemas, SKILL.md, shared `src/core/tools/` refactor) — landed in f0c3b80. 86 new tests in the extension. **8 non-blocking follow-ups:** live `pi` E2E not verified here (the human should run `pi extensions install ./extensions/wopr-for-pi` and smoke-test), plain JSON-Schema cast `as any` (TypeBox `parameters`), extension not a workspace member, diff over PRD's 800-line budget by tests, `bun.lockb` re-serialization, misnamed test, etc.
+- **Remote permission approvals via ntfy** (config block, `askRemote` resolver, `readInbox` helper, `always-allow` per-run rule, `--no-tui` integration) — landed in 9217678. 654 tests pass. **6 non-blocking follow-ups:** `parseReply` substring-match is fragile to negation (security MEDIUM, deferred — recommendation: require explicit keywords), `always-allow` is exact-command match (narrower than PRD "rest of run"), `agent`/`phase` shown as "unknown" in phone notifications (architectural — needs threading through tool_call handler), TUI config editor for approvals is read-only viewer only (PRD coverage partial), plaintext ntfy auth in config (pre-existing), no live ntfy E2E test (manual `--no-tui` is the only check).
