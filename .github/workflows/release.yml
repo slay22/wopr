@@ -11,15 +11,18 @@ permissions:
 jobs:
   build:
     name: build ${{ matrix.target.os }}-${{ matrix.target.arch }}
-    runs-on: ubuntu-latest
+    # Each platform builds on its own OS runner so native packages
+    # (@opentui/core-darwin-arm64, etc.) are available — cross-compiling
+    # from a single linux runner doesn't work for these.
+    runs-on: ${{ matrix.target.runs-on }}
     strategy:
       fail-fast: false
       matrix:
         target:
-          - { os: darwin, arch: arm64 }
-          - { os: darwin, arch: x64 }
-          - { os: linux, arch: x64 }
-          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: arm64, runs-on: macos-14 }
+          - { os: darwin, arch: x64, runs-on: macos-13 }
+          - { os: linux, arch: x64, runs-on: ubuntu-latest }
+          - { os: linux, arch: arm64, runs-on: ubuntu-24.04-arm }
 
     steps:
       - uses: actions/checkout@v4
@@ -39,13 +42,9 @@ jobs:
         run: bun test
 
       - name: Build binary
-        env:
-          TARGET_OS: ${{ matrix.target.os }}
-          TARGET_ARCH: ${{ matrix.target.arch }}
         run: |
           mkdir -p dist
           bun build --compile \
-            --target=bun-${{ matrix.target.os }}-${{ matrix.target.arch }} \
             src/main.ts \
             --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
 
