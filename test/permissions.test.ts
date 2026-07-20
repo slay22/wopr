@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import type { ExtensionAPI, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent"
 
 import { startPermissionGate, type StartGateOptions } from "../src/permissions"
 import { noopProgress, type PermissionPromptInfo, type PermissionReply, type ProgressUI } from "../src/progress"
+import type { ApprovalsConfig } from "../src/types"
 
 type Handler = (event: ToolCallEvent) => Promise<ToolCallEventResult | void> | ToolCallEventResult | void
 
@@ -65,5 +66,93 @@ describe("permission gate (tool_call hook)", () => {
 
   test("non-interactive run rejects ask-level commands", async () => {
     expect(blocked(await decideBash("./deploy-prod.sh", { interactive: false }))).toBe(true)
+  })
+})
+
+describe("permission gate with remote approvals", () => {
+  const originalFetch = globalThis.fetch
+  const originalRandomUUID = crypto.randomUUID
+  const approvalsConfig: ApprovalsConfig = {
+    topic: { kind: "ntfy", server: "https://ntfy.sh", topic: "wopr-approvals-test" },
+    timeoutSeconds: 10,
+    onTimeout: "reject",
+  }
+
+  beforeEach(() => {
+    // Make the gate use a predictable request ID so the mock feed can match it
+    crypto.randomUUID = () => "a1b2c3d4-e5f6-7890-abcd-ef1234567890" as `${string}-${string}-${string}-${string}-${string}`
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    crypto.randomUUID = originalRandomUUID
+  })
+
+  /** Mocks ntfy so the gate can POST notifications and GET inbox replies.
+   * The inbox feed message must include the request ID prefix "a1b2c3d4"
+   * since the randomUUID mock is frozen to that value. */
+  function mockNtfy(inboxReply: "allow" | "reject" | "always" | "none") {
+    const ts = Math.floor(Date.now() / 1000)
+    const message = inboxReply === "none" ? "" : `${inboxReply} a1b2c3d4`
+    const feed = message ? `{"id":"m1","time":${ts},"event":"message","topic":"wopr-approvals-test","message":"${message}"}` : ""
+    globalThis.fetch = (async (url: RequestInfo | URL, options?: RequestInit) => {
+      if (options?.method === "POST") return new Response("ok", { status: 200 })
+      if (String(url).includes("/json?")) return new Response(feed, { status: 200 })
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+  }
+
+  test("non-interactive with approvals configured uses remote resolver (allow)", async () => {
+    mockNtfy("allow")
+    const handler = toolCallHandler({
+      interactive: false,
+      directory: "/tmp",
+      approvals: approvalsConfig,
+      runId: "test-run-remote-1",
+      phase: "implement",
+      agent: "implementer",
+    })
+    const result = (await handler(bash("./deploy-prod.sh"))) ?? {}
+    // Allow once from remote = not blocked
+    expect(blocked(result)).toBe(false)
+  }, 15000)
+
+  test("non-interactive with approvals configured: reject blocks", async () => {
+    mockNtfy("reject")
+    const handler = toolCallHandler({
+      interactive: false,
+      directory: "/tmp",
+      approvals: approvalsConfig,
+      runId: "test-run-remote-2",
+      phase: "security",
+      agent: "security-auditor",
+    })
+    const result = (await handler(bash("./deploy-prod.sh"))) ?? {}
+    expect(blocked(result)).toBe(true)
+  }, 15000)
+
+  test("non-interactive without approvals configured rejects normally", async () => {
+    const handler = toolCallHandler({
+      interactive: false,
+      directory: "/tmp",
+      // no approvals
+    })
+    const result = (await handler(bash("./deploy-prod.sh"))) ?? {}
+    expect(blocked(result)).toBe(true)
+  })
+
+  test("interactive with approvals configured still uses TUI prompt", async () => {
+    // When interactive is true, the remote approvals path is skipped.
+    // We use noopProgress with askPermission that returns "reject".
+    const progress: ProgressUI = { ...noopProgress, askPermission: async () => "reject" as const }
+    const handler = toolCallHandler({
+      interactive: true,
+      directory: "/tmp",
+      approvals: approvalsConfig,
+      progress,
+    })
+    const result = (await handler(bash("./deploy-prod.sh"))) ?? {}
+    // Should use the TUI prompt (reject via askPermission) → blocked
+    expect(blocked(result)).toBe(true)
   })
 })
