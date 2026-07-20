@@ -10,7 +10,7 @@
     "dev": "bun run src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "build": "bun build --compile src/main.ts --outfile wopr"
+    "build": "bun build --compile --define WOPR_VERSION=\"'$(node -p \"require('./package.json').version')\"'\" src/main.ts --outfile wopr"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.7",
