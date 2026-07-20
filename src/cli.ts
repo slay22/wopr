@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { readVersion } from "./version"
-
 import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type WoprDefaults } from "./config"
 import { detectBaseRef, initializeRepoWithInitialCommit, repoBootstrapStatus } from "./git"
 import { log } from "./log"
