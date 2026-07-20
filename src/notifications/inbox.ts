@@ -32,7 +32,7 @@ export async function readInboxSince(target: NtfyTarget, sinceUnixSec: number): 
   }
 
   if (target.auth) {
-    const encoded = btoa(`${target.auth.user}:${target.auth.pass}`)
+    const encoded = Buffer.from(`${target.auth.user}:${target.auth.pass}`).toString("base64")
     headers["Authorization"] = `Basic ${encoded}`
   }
 
