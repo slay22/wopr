@@ -343,6 +343,8 @@ export async function run(options: RunOptions) {
       permissions: options.permissions,
       autoAccept,
       judgeModel,
+      approvals: options.approvals,
+      runId: workspace.runID,
     })
 
     const resuming = Boolean(options.resumeRunID)

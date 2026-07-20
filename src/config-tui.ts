@@ -787,6 +787,18 @@ export class ConfigEditor {
     })
     rows.push(infoRow(readonlyList("targets", notifUrls.length > 0 ? notifUrls : ["none"])))
 
+    rows.push(blankRow(), sectionRow("Approvals  (read-only — edit in .wopr/config.yaml)"))
+    if (config.approvals) {
+      const a = config.approvals
+      const auth = a.topic.auth ? `${a.topic.auth.user}:****@` : ""
+      const topicUrl = a.topic.server === "https://ntfy.sh" ? `ntfy://${auth}${a.topic.topic}` : `ntfy://${auth}${a.topic.server}/${a.topic.topic}`
+      rows.push(infoRow(readonlyList("topic", [topicUrl])))
+      rows.push(infoRow(readonlyList("timeout", [`${a.timeoutSeconds}s`])))
+      rows.push(infoRow(readonlyList("onTimeout", [a.onTimeout])))
+    } else {
+      rows.push(infoRow("disabled"))
+    }
+
     rows.push(blankRow(), sectionRow("Permissions  (read-only — edit in .wopr/config.yaml)"))
     rows.push(infoRow(readonlyList("allow", config.permissions.allow)))
     rows.push(infoRow(readonlyList("deny", config.permissions.deny)))

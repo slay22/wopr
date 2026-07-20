@@ -1,5 +1,5 @@
 import type { EvaluationConfig } from "./evaluate"
-import type { NotificationTarget } from "./notifications/types"
+import type { NotificationTarget, NtfyTarget } from "./notifications/types"
 
 export type Budget = {
   /** Hard cap in USD; the run aborts when spent + next_phase_estimate exceeds this. */
@@ -48,6 +48,20 @@ export type RunOptions = {
   hooks: HooksConfig
   /** Notification targets resolved from config and CLI flags. */
   notifications: NotificationTarget[]
+  /** Remote approvals configuration; absent means disabled. */
+  approvals?: ApprovalsConfig
+}
+
+/**
+ * Configuration for remote permission approvals via ntfy.
+ */
+export type ApprovalsConfig = {
+  /** The ntfy topic the user sends approval replies to. */
+  topic: NtfyTarget
+  /** How long to wait for the user's reply before timing out. Default: 300 (5 min). */
+  timeoutSeconds: number
+  /** What to do on timeout. Default: "reject". */
+  onTimeout: "reject" | "allow-once"
 }
 
 export type PermissionAdditions = {

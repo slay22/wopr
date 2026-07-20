@@ -473,6 +473,8 @@ export async function resolveRunOptions(parsed: ParsedArgs): Promise<Omit<RunOpt
     agents,
     permissions: config?.permissions ?? { allow: [], deny: [] },
     hooks: config?.hooks ?? emptyHooksConfig(),
+    // Approvals: read from merged config (no CLI flags for approvals)
+    approvals: config?.approvals,
     // Notification resolution: --no-notify clears; otherwise --notify flags override config
     notifications: parsed.noNotify
       ? []

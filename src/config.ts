@@ -25,8 +25,9 @@ import {
   type PipelineSpec,
   type StepSpec,
 } from "./pipeline"
-import type { AgentSpec, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
+import type { AgentSpec, ApprovalsConfig, Budget, HookSet, HookSpec, HooksConfig, HookWhen, PermissionAdditions } from "./types"
 import { parseNotificationUrl } from "./notifications/parse"
+import type { NtfyTarget } from "./notifications/types"
 import { woprHome, woprRoot, globalConfigPath } from "./workspace"
 
 /**
@@ -41,6 +42,8 @@ export type WoprConfig = {
   hooks: HooksConfig
   attachments: string[]
   notifications: NotificationTarget[]
+  /** Remote approvals via ntfy; absent means disabled. */
+  approvals?: ApprovalsConfig
 }
 
 export type WoprDefaults = {
@@ -134,6 +137,8 @@ export function mergeWoprConfigs(global: WoprConfig | undefined, project: WoprCo
     attachments: [...global.attachments, ...project.attachments],
     // Project notifications override global ones entirely (like agents/pipelines)
     notifications: project.notifications.length > 0 ? project.notifications : global.notifications,
+    // Project approvals override global ones entirely
+    approvals: project.approvals ?? global.approvals,
   }
 }
 
@@ -257,6 +262,14 @@ permissions:
 #   - ntfy://wopr-topic
 #   - ntfy://ntfy.example.com/wopr-team
 
+# Remote permissions approvals via ntfy.
+# When configured, ask-level permission prompts are sent as ntfy notifications
+# and the user replies from the ntfy app. See AGENTS.md §5 for details.
+# approvals:
+#   topic: ntfy://wopr-approvals-topic
+#   timeoutSeconds: 300        # how long to wait for a reply (default: 300)
+#   onTimeout: reject          # reject or allow-once (default: reject)
+
 attachments: []
 `
 
@@ -341,14 +354,14 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
     throw new ConfigError(`${source}: invalid YAML: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  const config: WoprConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [], notifications: [] }
+  const config: WoprConfig = { defaults: {}, agents: {}, pipelines: {}, permissions: { allow: [], deny: [] }, hooks: emptyHooksConfig(), attachments: [], notifications: [], approvals: undefined }
   if (raw === null || raw === undefined) return config
 
   const v = new Validator(source)
   const root = v.record(raw, "")
   // Unknown keys warn instead of failing so configs written for a newer
   // wopr still load; typos surface in the warning either way.
-  v.knownKeys(root, "", ["version", "defaults", "agents", "pipelines", "permissions", "hooks", "attachments", "notifications"])
+  v.knownKeys(root, "", ["version", "defaults", "agents", "pipelines", "permissions", "hooks", "attachments", "notifications", "approvals"])
 
   if (root.version !== undefined && root.version !== 1) v.fail("version", `unsupported value ${JSON.stringify(root.version)}; this wopr reads version 1`)
 
@@ -367,6 +380,10 @@ export function parseWoprConfig(body: string, source: string, targetDir: string)
         throw new ConfigError(`notifications: ${error instanceof Error ? error.message : String(error)}`)
       }
     })
+  }
+
+  if (root.approvals !== undefined && root.approvals !== null) {
+    config.approvals = validateApprovals(v, root.approvals)
   }
 
   return config
@@ -523,6 +540,37 @@ function validateReports(v: Validator, raw: unknown, path: string): "previous" |
   return v.fail(path, `must be "previous", "all", "none", or a list of step names`)
 }
 
+function validateApprovals(v: Validator, raw: unknown): ApprovalsConfig {
+  const record = v.record(raw, "approvals")
+  v.knownKeys(record, "approvals", ["topic", "timeoutSeconds", "onTimeout"])
+
+  if (record.topic === undefined) v.fail("approvals.topic", "is required when approvals is configured")
+
+  const rawTopic = v.nonEmptyString(record.topic, "approvals.topic")
+  let topic: NtfyTarget
+  try {
+    const parsed = parseNotificationUrl(rawTopic)
+    if (parsed.kind !== "ntfy") v.fail("approvals.topic", "must be an ntfy URL")
+    topic = parsed as NtfyTarget
+  } catch (error) {
+    throw new ConfigError(`approvals.topic: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const timeoutSeconds = record.timeoutSeconds !== undefined
+    ? v.positiveInt(record.timeoutSeconds, "approvals.timeoutSeconds")
+    : 300
+
+  let onTimeout: "reject" | "allow-once" = "reject"
+  if (record.onTimeout !== undefined) {
+    if (record.onTimeout !== "reject" && record.onTimeout !== "allow-once") {
+      v.fail("approvals.onTimeout", 'must be "reject" or "allow-once"')
+    }
+    onTimeout = record.onTimeout
+  }
+
+  return { topic, timeoutSeconds, onTimeout }
+}
+
 function validatePermissions(v: Validator, raw: unknown): PermissionAdditions {
   const record = v.record(raw, "permissions")
   if (record.yolo !== undefined) v.fail("permissions.yolo", "is not supported: a repo must not grant itself permissions; --yolo is per-invocation only")
@@ -653,6 +701,20 @@ export function serializeWoprConfig(config: WoprConfig): string {
   const hooks = serializeHooks(config.hooks)
   if (hooks) out.hooks = hooks
   if (config.attachments.length > 0) out.attachments = config.attachments
+  if (config.approvals !== undefined) {
+    const a = config.approvals
+    const authPart = a.topic.auth ? `${a.topic.auth.user}:${a.topic.auth.pass}@` : ""
+    let topicUrl: string
+    if (a.topic.server === "https://ntfy.sh") {
+      topicUrl = `ntfy://${authPart}${a.topic.topic}`
+    } else {
+      topicUrl = `ntfy://${authPart}${a.topic.server}/${a.topic.topic}`
+    }
+    const serialized: Record<string, unknown> = { topic: topicUrl }
+    if (a.timeoutSeconds !== 300) serialized.timeoutSeconds = a.timeoutSeconds
+    if (a.onTimeout !== "reject") serialized.onTimeout = a.onTimeout
+    out.approvals = serialized
+  }
   if (config.notifications.length > 0) {
     // Serialize targets back as URLs for readability
     out.notifications = config.notifications.map((target) => {
@@ -706,6 +768,7 @@ export function defaultConfigTemplate(): WoprConfig {
     hooks: emptyHooksConfig(),
     attachments: [],
     notifications: [],
+    approvals: undefined,
   }
 }
 

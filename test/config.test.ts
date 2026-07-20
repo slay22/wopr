@@ -685,4 +685,107 @@ describe("budget validation", () => {
     expect(reparsed.defaults.budget?.perRun).toBe(10)
     expect(reparsed.defaults.budget?.onExceed).toBe("warn-and-continue")
   })
+
+  describe("approvals config", () => {
+    const approveParse = (body: string) => parse(body)
+
+    test("parses approvals section from YAML", () => {
+      const config = approveParse(`
+approvals:
+  topic: ntfy://wopr-approvals-topic
+  timeoutSeconds: 600
+  onTimeout: allow-once
+`)
+      expect(config.approvals).toBeDefined()
+      expect(config.approvals!.topic.kind).toBe("ntfy")
+      expect(config.approvals!.topic.topic).toBe("wopr-approvals-topic")
+      expect(config.approvals!.timeoutSeconds).toBe(600)
+      expect(config.approvals!.onTimeout).toBe("allow-once")
+    })
+
+    test("defaults for timeoutSeconds and onTimeout", () => {
+      const config = approveParse(`
+approvals:
+  topic: ntfy://wopr-approvals-topic
+`)
+      expect(config.approvals).toBeDefined()
+      expect(config.approvals!.timeoutSeconds).toBe(300)
+      expect(config.approvals!.onTimeout).toBe("reject")
+    })
+
+    test("rejects missing topic", () => {
+      expect(() => approveParse(`
+approvals:
+  timeoutSeconds: 300
+`)).toThrow("approvals.topic")
+    })
+
+    test("rejects invalid onTimeout value", () => {
+      expect(() => approveParse(`
+approvals:
+  topic: ntfy://wopr-approvals-topic
+  onTimeout: maybe
+`)).toThrow('must be "reject" or "allow-once"')
+    })
+
+    test("omitting approvals defaults to undefined", () => {
+      const config = approveParse(`defaults: {}\n`)
+      expect(config.approvals).toBeUndefined()
+    })
+
+    test("parses self-hosted ntfy server", () => {
+      const config = approveParse(`
+approvals:
+  topic: ntfy://ntfy.example.com/wopr-approvals
+`)
+      expect(config.approvals!.topic.server).toBe("https://ntfy.example.com")
+      expect(config.approvals!.topic.topic).toBe("wopr-approvals")
+    })
+
+    test("round-trips through serialize + reparse", () => {
+      const config = parse(
+        [
+          "approvals:",
+          "  topic: ntfy://wopr-approvals-topic",
+          "  timeoutSeconds: 600",
+          "  onTimeout: allow-once",
+        ].join("\n"),
+      )
+      const yaml = serializeWoprConfig(config)
+      expect(yaml).toContain("topic")
+      const reparsed = parse(yaml)
+      expect(reparsed.approvals).toBeDefined()
+      expect(reparsed.approvals!.topic.topic).toBe("wopr-approvals-topic")
+      expect(reparsed.approvals!.timeoutSeconds).toBe(600)
+      expect(reparsed.approvals!.onTimeout).toBe("allow-once")
+    })
+
+    test("merge: project overrides global approvals", () => {
+      const global = parseWoprConfig(
+        "approvals:\n  topic: ntfy://global-approvals\n",
+        "~/.wopr/config.yaml",
+        "/tmp",
+      )
+      const project = parseWoprConfig(
+        "approvals:\n  topic: ntfy://project-approvals\n",
+        ".wopr/config.yaml",
+        "/tmp",
+      )
+      const merged = mergeWoprConfigs(global, project)
+      expect(merged!.approvals).toBeDefined()
+      expect(merged!.approvals!.topic.topic).toBe("project-approvals")
+    })
+
+    test("merge: global approvals used when project has none", () => {
+      const global = parseWoprConfig(
+        "approvals:\n  topic: ntfy://global-approvals\n",
+        "~/.wopr/config.yaml",
+        "/tmp",
+      )
+      const project = parseWoprConfig("defaults: {}", ".wopr/config.yaml", "/tmp")
+      const merged = mergeWoprConfigs(global, project)
+      expect(merged!.approvals).toBeDefined()
+      expect(merged!.approvals!.topic.topic).toBe("global-approvals")
+    })
+  })
 })
