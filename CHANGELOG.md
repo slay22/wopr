@@ -5,7 +5,7 @@
 ### Added: Pi extension (`extensions/wopr-for-pi/`)
 
 - **New directory `extensions/wopr-for-pi/`.** A [pi](https://github.com/earendil-works/pi)
-  native extension that registers all 22 wopr tools with pi's `ExtensionAPI`.
+  native extension that registers all 23 wopr tools with pi's `ExtensionAPI`.
   No subprocess, no MCP — tools run in-proc over the typed core API.
 - **`index.ts`** — extension entry point, loads and registers all tools.
 - **`tools.ts`** — wraps each shared `ToolDef` from `src/core/tools/` as a pi
@@ -17,7 +17,7 @@
 
 ### Added: Shared tool definitions (`src/core/tools/`)
 
-- **New directory `src/core/tools/`.** Single source of truth for the 22 tool
+- **New directory `src/core/tools/`.** Single source of truth for the 23 tool
   definitions: name, description, JSON Schema, and executor. Both the MCP server
   and the pi extension consume from here.
 - **Refactored `src/mcp/tools/`.** Reduced to a thin adapter over the shared

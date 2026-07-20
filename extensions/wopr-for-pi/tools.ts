@@ -1,5 +1,5 @@
 /**
- * Pi tool wrappers for the 22 shared wopr tool definitions.
+ * Pi tool wrappers for the 23 shared wopr tool definitions.
  *
  * Each tool is imported from the shared `src/core/tools` source and wrapped
  * in a pi `ToolDefinition` that pi's ExtensionAPI.registerTool() accepts.
@@ -12,7 +12,7 @@ import { allToolDefs } from "../../src/core/tools"
 import type { ToolDef } from "../../src/core/tools"
 
 /**
- * Register all 22 wopr tools with a pi ExtensionAPI instance.
+ * Register all 23 wopr tools with a pi ExtensionAPI instance.
  *
  * Each shared ToolDef is wrapped in a pi ToolDefinition with:
  * - The same `name`, `description` from the shared source

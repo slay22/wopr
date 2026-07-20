@@ -1,7 +1,7 @@
 /**
  * wopr-for-pi extension entry point.
  *
- * Registers all 22 wopr orchestration tools as pi-native tools and loads the
+ * Registers all 23 wopr orchestration tools as pi-native tools and loads the
  * wopr skill into pi's context for automatic discovery.
  *
  * @module
@@ -13,7 +13,7 @@ import { registerAllWoprTools } from "./tools"
 const extension: InlineExtension = {
   name: "wopr",
   factory: (pi) => {
-    // Register all 22 wopr tools with the pi session
+    // Register all 23 wopr tools with the pi session
     registerAllWoprTools(pi)
 
     // The skill.md file at extensions/wopr-for-pi/skill.md is the companion
