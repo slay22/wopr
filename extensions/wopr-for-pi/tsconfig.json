@@ -9,8 +9,5 @@
     "noEmit": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["**/*.ts"],
-  "references": [
-    { "path": "../../tsconfig.json" }
-  ]
+  "include": ["**/*.ts", "../../src/markdown.d.ts"]
 }
