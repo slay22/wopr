@@ -1,3 +1,7 @@
 node_modules/
+# Build artifacts
+*.bun-build
+wopr
+# Legacy binary name from the project rename
 archer
 .DS_Store
