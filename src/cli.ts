@@ -700,7 +700,7 @@ Commands:
                            enter a prompt, and toggle run options
   init                     Create .wopr/config.yaml and .wopr/agents/*.md in the target repo
   init --global            Create ~/.wopr/config.yaml and ~/.wopr/agents/*.md
-  version                  Show version information and exit
+  version                  Show version and exit
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.wopr/runs)
   mcp                      Start the MCP server (stdio), or use --list-tools / --version
