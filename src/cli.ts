@@ -712,7 +712,6 @@ Commands:
 Flags:
   --help                   Show this help text and exit
   --version, -v            Show version and exit
-  version                  Show version information and exit
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all steps (repeatable)
   --steps <agents>         Comma-separated list of agent names for a custom dynamic
