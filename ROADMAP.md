@@ -57,6 +57,7 @@ In the order below, all small follow-ups:
 - **`tui.ts` split** (from the architecture review) — 2,819 lines, one class. Split into `tui/format.ts` (~500), `tui/panels.ts` (~700), `tui/input.ts` (~350), `tui/layout.ts` (~250), `tui.ts` shell (~600). Improves maintainability, no behavior change. Medium effort.
 - **TUI followups** — budget meter in launcher + runs browser + config editor (currently only in `tui.ts` per the notifications adversarial report). Small effort.
 - **Run progress overlay in the runs browser** — when a run is in flight, show live progress (current phase, percent, ETA) instead of just the metadata snapshot. Would require a polling mechanism. Small-medium effort.
+- **Animated splash screen** — on `wopr` startup (interactive launch, no subcommand), show a short NORAD-phosphor-style animation before the launcher takes over. A "WOPR ONLINE" or "GREETINGS PROFESSOR FALKEN" reveal, the existing radar spinner, ASCII art fading in. Pure polish, no functional change. Small effort, ~200-300 lines. Plays well with the existing WarGames easter eggs and NORAD phosphor identity (see commits `aed1700 feat(tui): NORAD phosphor identity` and `e30d00e feat(runner): WarGames easter eggs on existing quit + stall paths`). Skip-flag for users who don't want it (`--no-splash` or `WOPR_NO_SPLASH=1`).
 
 ### Notifications (gaps noted in the notifications adversarial report)
 
