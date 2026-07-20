@@ -90,6 +90,11 @@ function modelsStorePath(): string {
   return join(homedir(), ".pi", "agent", "models-store.json")
 }
 
+/** Reset the cached model catalog. Tests use this to swap in a fixture catalog. */
+export function resetModelCatalog(): void {
+  cachedCatalog = undefined
+}
+
 /**
  * Load the model catalog from disk. Cached after first load. Returns an empty
  * catalog if the file can't be read.

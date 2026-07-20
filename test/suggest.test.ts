@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import { suggestConfigForBudget } from "../src/suggest"
+import { setupCatalogFixture } from "./_helpers/catalog-fixture"
+
+setupCatalogFixture()
 
 describe("suggestConfigForBudget", () => {
   test("returns a suggestion that fits a generous budget", () => {
