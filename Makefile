@@ -4,6 +4,7 @@ INSTALL_DIR := $(HOME)/.local/bin
 .PHONY: build install uninstall clean test tidy
 
 build:
+	bun scripts/build-prompts.ts
 	VERSION=$$(node -p "require('./package.json').version") && \
 	bun build --compile \
 	  --define "WOPR_VERSION=\"$$VERSION\"" \
