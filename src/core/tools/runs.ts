@@ -1,3 +1,10 @@
+/**
+ * Shared tool definitions — runs category.
+ *
+ * @module
+ */
+
+import type { ToolDef } from "./index"
 import {
   startRun,
   getRunStatus,
@@ -8,95 +15,16 @@ import {
   getRunCommits,
   cancelRun,
   resumeRun,
-} from "../../core"
-import type { RunInput } from "../../core/types"
-import type { ToolHandler } from "./index"
+} from "../runs"
+import type { RunInput } from "../types"
 
-// ─── Tool handlers ──────────────────────────────────────────────────────────
-
-export const runsHandlers: Record<string, ToolHandler> = {
-  start_run: async (args) => {
-    const input = args as unknown as RunInput
-    if (!input.prompt) throw new Error("prompt is required")
-    if (!input.pipeline && !input.steps) throw new Error("pipeline or steps is required")
-    if (!input.targetDir) throw new Error("targetDir is required")
-
-    const handle = startRun(input)
-    return {
-      runId: handle.runId,
-      status: "started",
-      note: "Poll get_run_status for progress. The run executes in the background.",
-    }
-  },
-
-  get_run_status: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    return getRunStatus(runId)
-  },
-
-  list_runs: async (args) => {
-    const filter = args.filter as
-      | { targetDir?: string; since?: number; pipeline?: string; limit?: number }
-      | undefined
-    return listRuns(filter)
-  },
-
-  get_run_report: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    const phase = args.phase as string
-    if (!phase) throw new Error("phase is required")
-    return getRunReport(runId, phase)
-  },
-
-  get_run_cost: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    return getRunCost(runId)
-  },
-
-  get_run_diff: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    const against = (args.against as "base" | "previous" | undefined) ?? "base"
-    return getRunDiff(runId, against)
-  },
-
-  get_run_commits: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    return getRunCommits(runId)
-  },
-
-  cancel_run: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    const reason = args.reason as string | undefined
-    return cancelRun(runId, reason)
-  },
-
-  resume_run: async (args) => {
-    const runId = args.runId as string
-    if (!runId) throw new Error("runId is required")
-    const handle = await resumeRun(runId)
-    return {
-      runId: handle.runId,
-      status: "resumed",
-      note: "Poll get_run_status for progress.",
-    }
-  },
-}
-
-// ─── Tool definitions ───────────────────────────────────────────────────────
-
-export const runsToolDefs = [
+export const runsToolDefs: ToolDef[] = [
   {
     name: "start_run",
     description:
       "Start a wopr run. Returns a runId immediately. Poll get_run_status for progress.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["prompt", "targetDir"],
       properties: {
         prompt: { type: "string", description: "The PRD or task description." },
@@ -146,18 +74,36 @@ export const runsToolDefs = [
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const input = args as unknown as RunInput
+      if (!input.prompt) throw new Error("prompt is required")
+      if (!input.pipeline && !input.steps) throw new Error("pipeline or steps is required")
+      if (!input.targetDir) throw new Error("targetDir is required")
+
+      const handle = startRun(input)
+      return {
+        runId: handle.runId,
+        status: "started",
+        note: "Poll get_run_status for progress. The run executes in the background.",
+      }
+    },
   },
   {
     name: "get_run_status",
     description:
       "Poll the status of an in-flight or finished run. Returns starting/running/completed/failed/aborted/budget_exceeded.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID returned by start_run." },
       },
       additionalProperties: false,
+    },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      return getRunStatus(runId)
     },
   },
   {
@@ -165,7 +111,7 @@ export const runsToolDefs = [
     description:
       "List past runs, optionally filtered by targetDir, since timestamp, pipeline, or limit.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         filter: {
           type: "object",
@@ -179,13 +125,19 @@ export const runsToolDefs = [
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const filter = args.filter as
+        | { targetDir?: string; since?: number; pipeline?: string; limit?: number }
+        | undefined
+      return listRuns(filter)
+    },
   },
   {
     name: "get_run_report",
     description:
       "Read a phase report (markdown + structured findings) for a given run and phase.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId", "phase"],
       properties: {
         runId: { type: "string", description: "Run ID." },
@@ -193,24 +145,36 @@ export const runsToolDefs = [
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      const phase = args.phase as string
+      if (!phase) throw new Error("phase is required")
+      return getRunReport(runId, phase)
+    },
   },
   {
     name: "get_run_cost",
     description: "Cost breakdown by phase and model for a given run.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID." },
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      return getRunCost(runId)
+    },
   },
   {
     name: "get_run_diff",
     description: "File-level diff summary for a given run.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID." },
@@ -222,24 +186,35 @@ export const runsToolDefs = [
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      const against = (args.against as "base" | "previous" | undefined) ?? "base"
+      return getRunDiff(runId, against)
+    },
   },
   {
     name: "get_run_commits",
     description: "Commit list with phase annotations for a given run.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID." },
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      return getRunCommits(runId)
+    },
   },
   {
     name: "cancel_run",
     description: "Abort an in-flight run by ID.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID to cancel." },
@@ -247,17 +222,33 @@ export const runsToolDefs = [
       },
       additionalProperties: false,
     },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      const reason = args.reason as string | undefined
+      return cancelRun(runId, reason)
+    },
   },
   {
     name: "resume_run",
     description: "Resume an incomplete run by ID. Returns a new runId.",
     inputSchema: {
-      type: "object" as const,
+      type: "object",
       required: ["runId"],
       properties: {
         runId: { type: "string", description: "Run ID of an incomplete run to resume." },
       },
       additionalProperties: false,
+    },
+    execute: async (args) => {
+      const runId = args.runId as string
+      if (!runId) throw new Error("runId is required")
+      const handle = await resumeRun(runId)
+      return {
+        runId: handle.runId,
+        status: "resumed",
+        note: "Poll get_run_status for progress.",
+      }
     },
   },
 ]

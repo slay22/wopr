@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added: Pi extension (`extensions/wopr-for-pi/`)
+
+- **New directory `extensions/wopr-for-pi/`.** A [pi](https://github.com/earendil-works/pi)
+  native extension that registers all 22 wopr tools with pi's `ExtensionAPI`.
+  No subprocess, no MCP — tools run in-proc over the typed core API.
+- **`index.ts`** — extension entry point, loads and registers all tools.
+- **`tools.ts`** — wraps each shared `ToolDef` from `src/core/tools/` as a pi
+  `ToolDefinition`.
+- **`skill.md`** — teaches pi when and how to use the wopr tools.
+- **`README.md`** — install and usage docs.
+- **`package.json` / `tsconfig.json`** — workspace-ready package.
+- **Tests:** `extension.test.ts`, `tools.test.ts`, `skill.test.ts`.
+
+### Added: Shared tool definitions (`src/core/tools/`)
+
+- **New directory `src/core/tools/`.** Single source of truth for the 22 tool
+  definitions: name, description, JSON Schema, and executor. Both the MCP server
+  and the pi extension consume from here.
+- **Refactored `src/mcp/tools/`.** Reduced to a thin adapter over the shared
+  definitions. The individual `discovery.ts`, `config.ts`, `planning.ts`,
+  `runs.ts` files are removed; the shared copies are the canonical ones.
+- **Integration test** at `test/core/tools.integration.test.ts` verifying the
+  shared definitions match the core API.
+
 ### Added: Built-in ntfy notifications
 
 - **New module `src/notifications/`.** Typed notification system with pluggable

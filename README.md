@@ -22,6 +22,7 @@ Typical uses:
 - **Cap the cost of a run.** `wopr --budget 5.00 --prompt-file prd.md` aborts cleanly if the run would exceed $5. Configurable per-run, per-pipeline, or globally in `.wopr/config.yaml`. The TUI shows a live budget meter alongside the DEFCON meter.
 - **Get phone notifications on every phase.** `wopr --notify ntfy://wopr-leo-1234 --prompt-file prd.md` pings your phone (or a self-hosted ntfy server) when each phase finishes and on the validator's verdict. Off by default; opt in per-run or via config.
 - **Drive wopr from another coding agent.** `wopr mcp` starts an [MCP](https://modelcontextprotocol.io/) server (stdio transport) that exposes 23 tools over the typed core API. Claude Code, Cursor, Codex, and Continue can call `start_run`, `get_run_status`, `suggest_config_for_budget`, `preview_run`, and 19 more — zero shell, zero `wopr` subprocess.
+- **Drive wopr from inside pi.** The `wopr-for-pi` extension at `extensions/wopr-for-pi/` registers the same 22 tools as first-class pi-native tools and ships a skill.md that teaches pi *when* and *how* to use them. Install with `pi extensions install ./extensions/wopr-for-pi`.
 - **Encode your team's actual workflow.** Pipelines are YAML in `.wopr/config.yaml`: define, say, a `ship` pipeline — refine the branch, sync it with its base, draft the PR — and run `wopr -p ship`.
 
 Use it as a **CLI** or as a **TUI**, interchangeably: every run can be launched with plain flags and prompt files (`--no-tui` gives you plain logs for pipes and CI), or driven entirely from the TUI — `wopr` with no arguments opens the interactive launcher, every run gets a live dashboard, `wopr runs` browses past runs, and `wopr config` edits global and project config in place.
@@ -34,9 +35,9 @@ WOPR is reachable from three places, sharing the same engine and the same per-ru
 |---|---|---|
 | **CLI / TUI** | `wopr` shell command, or the interactive launcher | You (the human) are driving the run. Flags, prompt files, the dashboard, the runs browser. |
 | **MCP server** | `wopr mcp` — 23 tools over [Model Context Protocol](https://modelcontextprotocol.io/) stdio | Another coding agent (Claude Code, Cursor, Codex, Continue) calls wopr programmatically. Zero shell, zero subprocess. |
-| **Typed core API** | `import { startRun, listPipelines, suggestConfigForBudget } from "src/core"` | You build a custom transport, a pi extension, an IDE plugin, or anything else. The same functions the MCP server wraps. |
+| **Typed core API** | `import { startRun, listPipelines, suggestConfigForBudget } from "src/core"` | You build a custom transport, a pi extension, an IDE plugin, or anything else. The same functions the MCP server and pi extension both wrap. |
 
-Each surface is a thin layer over the same engine. The CLI/TUI don't go through the MCP server; the MCP server doesn't go through the CLI — both consume the core API directly.
+Each surface is a thin layer over the same engine. The CLI/TUI don't go through the MCP server; the MCP server doesn't go through the pi extension — all three consume the core API directly.
 
 **Pipelines are data, not code.** WOPR ships a family of built-ins (see [Built-in pipelines](#built-in-pipelines)) and a project can define its own in `.wopr/config.yaml` — any number of steps, its own agents and models, named human gates anywhere. Beyond sequencing agents, it owns the operational layer: repo-context attachment, a live permission gate, commit safety, phase reports, diff tracking, and the NORAD-styled TUI. It's written in Bun + TypeScript and drives [pi](https://github.com/earendil-works/pi) in-process — no separate server or subprocess, each phase a fresh pi agent session wired to WOPR's permission gate, attachments, and model catalog.
 
