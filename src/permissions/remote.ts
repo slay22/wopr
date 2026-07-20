@@ -66,7 +66,7 @@ export async function askRemote(
   // sees the same warning the interactive TTY prompt would show. Without this,
   // unattended approvals would happen blind to flagged-risk commands.
   if (request.judgeReason) {
-    messageLines.push(``, `⚠ Safety judge flagged this command: ${request.judgeReason}`)
+    messageLines.push(``, `⚠ ${request.judgeReason}`)
   }
   messageLines.push(
     ``,
@@ -77,7 +77,7 @@ export async function askRemote(
   )
 
   await sendNotification(config.topic, {
-    title: `🔐 wopr · ${request.agent} wants: ${truncate(request.command, 80)}`,
+    title: `wopr · ${request.agent} wants: ${truncate(request.command, 80)}`,
     message: messageLines.join("\n"),
     priority,
     tags,
