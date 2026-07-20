@@ -664,7 +664,7 @@ wopr/
 │   │   ├── runs.ts        # startRun, getRunStatus, getRunReport, cancelRun, …
 │   │   ├── errors.ts      # typed errors (ConfigError, RunNotFoundError, …)
 │   │   └── index.ts       # barrel
-│   ├── mcp/             # wopr mcp — 22-tool MCP server (stdio, JSON-RPC)
+│   ├── mcp/             # wopr mcp — 23-tool MCP server (stdio, JSON-RPC)
 │   ├── notifications/   # --notify flag, wopr notify test, ntfy client + dispatcher
 │   ├── loop.ts          # converge-loop control: plan signature, verdict progress, stall detection
 │   ├── evaluate.ts      # optional evaluation gate: install/build/test/run between iterations

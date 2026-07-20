@@ -766,9 +766,8 @@ pi extensions install /path/to/wopr/extensions/wopr-for-pi
 
 ### Tool surface
 
-All 23 tools share the same names, schemas, and behavior as the MCP server.
-Pi registers them without a prefix; the skill.md teaches pi to call them as
-`wopr_list_pipelines`, `wopr_start_run`, etc.
+All 23 tools share the same schemas and behavior as the MCP server's tools; pi adds a `wopr_` prefix to each name. The extension registers them as
+`wopr_list_pipelines`, `wopr_start_run`, etc., and the bundled `skill.md` teaches pi when and how to call them.
 
 ### The skill
 

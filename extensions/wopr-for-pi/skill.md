@@ -45,10 +45,10 @@ For a non-trivial implementation request, the standard pattern is:
 
 | Category | Tools |
 |---|---|
-| Discovery | list_pipelines, describe_pipeline, list_agents, describe_agent, list_models, describe_model |
-| Config | get_config, validate_config, diff_config, set_config |
-| Planning | preview_run, estimate_cost, suggest_config_for_budget, recommend_pipeline |
-| Runs | start_run, get_run_status, list_runs, get_run_report, get_run_cost, get_run_diff, get_run_commits, cancel_run, resume_run |
+| Discovery | wopr_list_pipelines, wopr_describe_pipeline, wopr_list_agents, wopr_describe_agent, wopr_list_models, wopr_describe_model |
+| Config | wopr_get_config, wopr_validate_config, wopr_diff_config, wopr_set_config |
+| Planning | wopr_preview_run, wopr_estimate_cost, wopr_suggest_config_for_budget, wopr_recommend_pipeline |
+| Runs | wopr_start_run, wopr_get_run_status, wopr_list_runs, wopr_get_run_report, wopr_get_run_cost, wopr_get_run_diff, wopr_get_run_commits, wopr_cancel_run, wopr_resume_run |
 
 ## Don't shell out to the `wopr` CLI
 

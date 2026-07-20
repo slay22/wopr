@@ -37,7 +37,7 @@ export function registerAllWoprTools(pi: ExtensionAPI): void {
  */
 function toPiToolDef(def: ToolDef) {
   return {
-    name: def.name,
+    name: `wopr_${def.name}`,
     label: def.name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
     description: def.description,
     parameters: def.inputSchema,

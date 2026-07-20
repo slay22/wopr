@@ -66,12 +66,12 @@ describe("wopr-for-pi extension", () => {
     registerAllWoprTools(mockPi as any)
 
     expect(registered.length).toBe(23)
-    expect(registered).toContain("list_pipelines")
-    expect(registered).toContain("start_run")
-    expect(registered).toContain("get_run_status")
-    expect(registered).toContain("cancel_run")
-    expect(registered).toContain("suggest_config_for_budget")
-    expect(registered).toContain("set_config")
+    expect(registered).toContain("wopr_list_pipelines")
+    expect(registered).toContain("wopr_start_run")
+    expect(registered).toContain("wopr_get_run_status")
+    expect(registered).toContain("wopr_cancel_run")
+    expect(registered).toContain("wopr_suggest_config_for_budget")
+    expect(registered).toContain("wopr_set_config")
   })
 
   test("extension entry point loads without error", async () => {
