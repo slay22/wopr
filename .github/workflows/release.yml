@@ -20,7 +20,7 @@ jobs:
       matrix:
         target:
           - { os: darwin, arch: arm64, runs-on: macos-14 }
-          - { os: darwin, arch: x64, runs-on: macos-13 }
+          - { os: darwin, arch: x64, runs-on: macos-14 }
           - { os: linux, arch: x64, runs-on: ubuntu-latest }
           - { os: linux, arch: arm64, runs-on: ubuntu-24.04-arm }
 
@@ -44,9 +44,19 @@ jobs:
       - name: Build binary
         run: |
           mkdir -p dist
-          bun build --compile \
-            src/main.ts \
-            --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          # For darwin-x64 on a macos-14 (arm64) runner we cross-compile to
+          # x64. @opentui/core ships native binaries for both arm64 and
+          # x64 darwin so the cross-target resolves cleanly.
+          if [ "${{ matrix.target.os }}" = "darwin" ] && [ "${{ matrix.target.arch }}" = "x64" ]; then
+            bun build --compile \
+              --target=bun-darwin-x64 \
+              src/main.ts \
+              --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          else
+            bun build --compile \
+              src/main.ts \
+              --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          fi
 
       - name: Package
         run: |
