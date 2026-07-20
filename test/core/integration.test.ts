@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { setupCatalogFixture } from "../_helpers/catalog-fixture"
 
-setupCatalogFixture()
 
 import {
   listPipelines,

@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { previewRun, estimateCost, suggestConfigForBudget } from "../../src/core/planning"
-import { setupCatalogFixture } from "../_helpers/catalog-fixture"
 
-setupCatalogFixture()
 
 describe("previewRun", () => {
   test("returns a complete RunPreview for the implement pipeline", () => {

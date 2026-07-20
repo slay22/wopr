@@ -87,7 +87,10 @@ export class ModelCatalog {
 
 /** Path to pi's model catalog. */
 function modelsStorePath(): string {
-  return join(homedir(), ".pi", "agent", "models-store.json")
+  // WOPR_MODEL_CATALOG_PATH overrides the default location; the test preload
+  // sets it to a small fixture so tests are hermetic (don't depend on a
+  // ~/.pi/agent/models-store.json that only exists after running pi).
+  return process.env.WOPR_MODEL_CATALOG_PATH ?? join(homedir(), ".pi", "agent", "models-store.json")
 }
 
 /** Reset the cached model catalog. Tests use this to swap in a fixture catalog. */
