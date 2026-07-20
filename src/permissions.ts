@@ -9,6 +9,8 @@ import type { ModelSelection } from "./pi"
 import { noopProgress, type AutoAccept, type PermissionPromptInfo, type PermissionReply, type ProgressUI } from "./progress"
 import { judgeCommand } from "./safety-judge"
 import type { PermissionAdditions } from "./types"
+import { askRemote, type ApprovalsConfig } from "./permissions/remote"
+import { AlwaysAllowStore } from "./permissions/always-allow"
 
 // On OpenCode this was a directory-scoped event listener replying to
 // `permission.asked`. On pi each phase session carries a `tool_call` extension
@@ -36,6 +38,14 @@ export type StartGateOptions = {
   autoAccept?: AutoAccept
   /** Model for the smart auto-accept judge; required for "smart" to do anything. */
   judgeModel?: ModelSelection
+  /** Remote approvals config; when set, non-TTY ask prompts fall back to ntfy. */
+  approvals?: ApprovalsConfig
+  /** The current run ID, used for always-allow state and request identification. */
+  runId?: string
+  /** The current phase name, used for request identification. */
+  phase?: string
+  /** The current agent name, used for request identification. */
+  agent?: string
 }
 
 export function startPermissionGate(options: StartGateOptions): PermissionGate {
@@ -43,6 +53,7 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
   const policy = bashPolicy(options.directory, options.permissions)
   const queue = serialQueue()
   const state = { paused: false, stopped: false }
+  const alwaysAllow = options.approvals && options.runId ? new AlwaysAllowStore(options.runId) : undefined
 
   const extension: InlineExtension = {
     name: "wopr-permissions",
@@ -54,7 +65,7 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
         if (!command) return {}
         // Serialize decisions so concurrent tool calls don't race the terminal
         // prompt or interleave judge output.
-        const allowed = await queue(() => decide(command, policy, options, progress, state))
+        const allowed = await queue(() => decide(command, policy, options, progress, state, alwaysAllow))
         return allowed ? {} : { block: true, reason: `wopr denied: ${command}` }
       })
     },
@@ -64,6 +75,10 @@ export function startPermissionGate(options: StartGateOptions): PermissionGate {
     extension,
     async stop() {
       state.stopped = true
+      // Clean up always-allow state on run completion
+      if (alwaysAllow) {
+        await alwaysAllow.clear().catch(() => {})
+      }
     },
     pause() {
       state.paused = true
@@ -80,6 +95,7 @@ async function decide(
   options: StartGateOptions,
   progress: ProgressUI,
   state: { paused: boolean },
+  alwaysAllow?: AlwaysAllowStore,
 ): Promise<boolean> {
   const decision = evaluateBashPolicy(command, policy)
   const summary = truncate(command, 200)
@@ -112,6 +128,33 @@ async function decide(
     }
     log.info(`[permission] smart auto-accept escalating to user: ${summary} — ${verdict.reason}`)
     judgeReason = `flagged by safety judge: ${verdict.reason}`
+  }
+
+  // Remote approvals: when not interactive (no TTY) and approvals are configured,
+  // use the ntfy remote resolver instead of auto-rejecting.
+  if (!options.interactive && options.approvals) {
+    const request = {
+      id: crypto.randomUUID(),
+      command,
+      agent: options.agent ?? "unknown",
+      phase: options.phase ?? "unknown",
+      runId: options.runId ?? "unknown",
+      timestamp: Date.now() / 1000,
+    }
+    progress.message(`sending remote permission request: ${summary}`)
+    log.info(`[permission] remote approval request ${request.id.slice(0, 8)}: ${summary}`)
+
+    const result = await askRemote(request, options.approvals, alwaysAllow)
+
+    if (result.source === "timeout") {
+      log.warn(`[permission] remote approval timed out after ${options.approvals.timeoutSeconds || 300}s: ${summary}; decision: ${result.decision}`)
+      progress.message(`remote approval timed out → ${result.decision}: ${summary}`)
+    } else {
+      log.info(`[permission] remote approval replied ${result.decision}: ${summary}`)
+      progress.message(`remote permission ${result.decision}: ${summary}`)
+    }
+
+    return result.decision !== "reject"
   }
 
   if (!options.interactive) {

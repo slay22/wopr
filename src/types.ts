@@ -1,5 +1,6 @@
 import type { EvaluationConfig } from "./evaluate"
 import type { NotificationTarget } from "./notifications/types"
+import type { ApprovalsConfig } from "./permissions/remote"
 
 export type Budget = {
   /** Hard cap in USD; the run aborts when spent + next_phase_estimate exceeds this. */
@@ -48,6 +49,8 @@ export type RunOptions = {
   hooks: HooksConfig
   /** Notification targets resolved from config and CLI flags. */
   notifications: NotificationTarget[]
+  /** Remote approvals configuration; absent means disabled. */
+  approvals?: ApprovalsConfig
 }
 
 export type PermissionAdditions = {

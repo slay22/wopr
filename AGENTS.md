@@ -382,6 +382,33 @@ pipelines:
 
 **For the agent picking the config** (when WOPR has an MCP server wired): `suggestConfigForBudget({ budget, pipeline, targetDir, preferences? })` returns a proposed config + cost estimate that fits the budget. See `src/suggest.ts` for the pure function and the README for the MCP server status.
 
+### Remote approvals
+
+If you're not at the keyboard but still want to review each permission prompt, configure `approvals:` in your config. The permission gate sends a high-priority ntfy notification for every `ask`-tier command; you reply from the ntfy app on the same topic.
+
+```yaml
+# ~/.wopr/config.yaml
+notifications:
+  - ntfy://wopr-leo-1234
+approvals:
+  topic: ntfy://wopr-approvals-leo-1234   # same topic, two-way
+  timeoutSeconds: 300                       # default: 5 min
+  onTimeout: reject                         # or allow-once
+```
+
+The approval flow:
+1. A command hits the `ask` tier (no TTY, or `--no-tui` was passed)
+2. The gate sends a high-priority ntfy notification with the command, agent, phase, and a prompt ID
+3. Your phone buzzes. Open the ntfy app and reply with `allow <id>` or `reject <id>` or `always <id>`
+4. The gate receives the reply within seconds and the run continues
+5. If you don't reply within `timeoutSeconds`, the config's `onTimeout` decision is applied (default: reject)
+
+The `always` reply persists for the remainder of the current run, so you don't see the same prompt twice. The state is cleaned up when the run completes.
+
+**Security boundary:** the ntfy topic name is the only access control. Anyone with the topic name can approve commands. This is acceptable for a local CLI tool; for multi-user or remote deployments, a follow-up will add authentication.
+
+**Off by default:** without `approvals:` in your config, no ntfy traffic happens for permissions and the run blocks on a TTY prompt (or fails if there's no TTY).
+
 ---
 
 ## 10. Common pitfalls
@@ -394,6 +421,7 @@ pipelines:
 | Paid models by default | Surprise $5-30 bill | Configure `defaults.model` in `.wopr/config.yaml` to a free model |
 | Hitting `401 Missing Authentication header` | Built-in pipeline used a paid model the user hasn't authed for | Add a `pipelines.<name>` override in `.wopr/config.yaml` with free-tier models |
 | Run takes 3 hours and you were expecting 30 min | Code-writing on free-tier is slow; security/review are faster | Set expectations; use `--smart` or `--yolo` if you need to skip permission prompts |
+| Run blocked on permission prompt while you're away | The TUI prompt waited for keyboard input; the run stalled | Pass `--yolo` for unattended runs, or configure `approvals:` in your config for remote approval from your phone |
 | Validator says PASS but the diff is bad | Validator can miss things (it's an LLM too) | Always read the diff yourself before merging |
 | Run produced 12 failing tests | Agent shipped tests with wrong assertions (e.g. expected `ask`, got `allow`) | Read the test file, fix by hand, re-run `bun test` |
 | `--yolo` on a security run | Permission gate becomes a rubber stamp | Don't. Use `--yolo` only for trusted, low-risk iterations |
