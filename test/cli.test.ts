@@ -201,6 +201,19 @@ describe("cli parsing", () => {
     expect(command.type).toBe("version")
   })
 
+  test("version subcommand prints version", async () => {
+    const command = await parseCommand(["version"])
+    expect(command.type).toBe("version")
+    if (command.type === "version") {
+      expect(command.text).toMatch(/^wopr /)
+    }
+  })
+
+  test("version subcommand rejects extra arguments", async () => {
+    await expect(parseCommand(["version", "--flag"])).rejects.toThrow("usage: wopr version")
+    await expect(parseCommand(["version", "extra"])).rejects.toThrow("usage: wopr version")
+  })
+
   test("parses --steps flag", () => {
     const parsed = parseArgs(["--steps", "implementer,tests", "prompt"])
     expect(parsed.steps).toBeDefined()

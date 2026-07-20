@@ -284,6 +284,10 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
   if (argv[0] === "mcp") {
     return { type: "mcp", argv }
   }
+  if (argv[0] === "version") {
+    if (argv.length > 1) throw new Error("usage: wopr version")
+    return { type: "version", text: `wopr ${readVersion()}\n` }
+  }
 
   const parsed = parseArgs(argv)
   if (parsed.help) return { type: "help", text: help() }
@@ -696,6 +700,7 @@ Commands:
                            enter a prompt, and toggle run options
   init                     Create .wopr/config.yaml and .wopr/agents/*.md in the target repo
   init --global            Create ~/.wopr/config.yaml and ~/.wopr/agents/*.md
+  version                  Show version information and exit
   runs [run-id]            Browse run history: resume a run, read its summary/reports,
                            or open a subshell in its run dir (under ~/.wopr/runs)
   mcp                      Start the MCP server (stdio), or use --list-tools / --version
@@ -707,6 +712,7 @@ Commands:
 Flags:
   --help                   Show this help text and exit
   --version, -v            Show version and exit
+  version                  Show version information and exit
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all steps (repeatable)
   --steps <agents>         Comma-separated list of agent names for a custom dynamic
