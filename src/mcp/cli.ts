@@ -1,39 +1,6 @@
-import { readFileSync } from "node:fs"
-import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
-
 import { startMcpServer } from "./server"
 import { allToolDefs } from "../core/tools"
-
-/** Version read from package.json. */
-let _version: string | undefined
-
-function readVersion(): string {
-  if (_version) return _version
-  try {
-    // Try to read from the built package first (production binary), fall back
-    // to the source package.json (development).
-    const paths = [
-      resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"),
-      resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "package.json"),
-    ]
-    for (const p of paths) {
-      try {
-        const pkg = JSON.parse(readFileSync(p, "utf8")) as { version?: string }
-        if (pkg.version) {
-          _version = pkg.version
-          return _version
-        }
-      } catch {
-        // try next path
-      }
-    }
-  } catch {
-    // ignore
-  }
-  _version = "0.1.0"
-  return _version
-}
+import { readVersion } from "../version"
 
 /**
  * Handle the `wopr mcp` CLI subcommand.

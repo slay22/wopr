@@ -169,6 +169,38 @@ describe("cli parsing", () => {
     expect(parsed.noNotify).toBe(true)
   })
 
+  test("parses --version flag", () => {
+    const parsed = parseArgs(["--version"])
+    expect(parsed.version).toBe(true)
+  })
+
+  test("parses -v flag", () => {
+    const parsed = parseArgs(["-v"])
+    expect(parsed.version).toBe(true)
+  })
+
+  test("--version returns a version command", async () => {
+    const command = await parseCommand(["--version"])
+    expect(command.type).toBe("version")
+    if (command.type === "version") {
+      expect(command.text).toMatch(/^wopr /)
+    }
+  })
+
+  test("-v returns a version command", async () => {
+    const command = await parseCommand(["-v"])
+    expect(command.type).toBe("version")
+    if (command.type === "version") {
+      expect(command.text).toMatch(/^wopr /)
+    }
+  })
+
+  test("--version outputs version and exits (no prompt needed)", async () => {
+    // parseCommand should succeed without a prompt when --version is set
+    const command = await parseCommand(["--version"])
+    expect(command.type).toBe("version")
+  })
+
   test("parses --steps flag", () => {
     const parsed = parseArgs(["--steps", "implementer,tests", "prompt"])
     expect(parsed.steps).toBeDefined()

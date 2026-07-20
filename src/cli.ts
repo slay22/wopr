@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
+import { readVersion } from "./version"
+
 import { buildAgentRegistry, emptyHooksConfig, loadMergedWoprConfig, selectPipelineSpec, writeDefaultGlobalConfig, writeDefaultProjectConfig, type WoprDefaults } from "./config"
 import { detectBaseRef, initializeRepoWithInitialCommit, repoBootstrapStatus } from "./git"
 import { log } from "./log"
@@ -22,6 +24,7 @@ export type ParsedArgs = {
   prompt?: string
   promptFile?: string
   help?: boolean
+  version?: boolean
   pipeline?: string
   /** Custom step specs for dynamic pipeline composition (e.g. --steps "implementer,tests"). Takes precedence over pipeline. */
   steps?: StepSpec[]
@@ -69,6 +72,7 @@ export type InitOptions = {
 
 export type CliCommand =
   | { type: "help"; text: string }
+  | { type: "version"; text: string }
   | { type: "run"; options: RunOptions }
   | { type: "runs"; runID?: string }
   | { type: "worktrees"; action: "list" | "prune"; force: boolean }
@@ -85,6 +89,10 @@ export async function parseAndRun(argv: string[]) {
 
   const command = await parseCommand(argv)
   if (command.type === "help") {
+    process.stdout.write(command.text)
+    return
+  }
+  if (command.type === "version") {
     process.stdout.write(command.text)
     return
   }
@@ -280,6 +288,8 @@ export async function parseCommand(argv: string[]): Promise<CliCommand> {
 
   const parsed = parseArgs(argv)
   if (parsed.help) return { type: "help", text: help() }
+  if (parsed.version) return { type: "version", text: `wopr ${readVersion()}
+` }
 
   if (parsed.prompt && parsed.promptFile) {
     throw new Error("use either a positional prompt or --prompt-file, not both")
@@ -540,6 +550,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "-h":
         parsed.help = true
         return parsed
+      case "--version":
+      case "-v":
+        parsed.version = true
+        return parsed
       case "--prompt-file":
       case "--prd":
         parsed.promptFile = takeValue()
@@ -692,6 +706,8 @@ Commands:
   notify test [url...]     Send a test notification (uses configured targets, or explicit URLs)
 
 Flags:
+  --help                   Show this help text and exit
+  --version, -v            Show version and exit
   --prompt-file <path>     Read the PRD/prompt from a file
   --file, -f <path>        Attach a file or directory to all steps (repeatable)
   --steps <agents>         Comma-separated list of agent names for a custom dynamic
