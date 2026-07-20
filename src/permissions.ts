@@ -140,6 +140,7 @@ async function decide(
       phase: options.phase ?? "unknown",
       runId: options.runId ?? "unknown",
       timestamp: Date.now() / 1000,
+      ...(judgeReason ? { judgeReason } : {}),
     }
     progress.message(`sending remote permission request: ${summary}`)
     log.info(`[permission] remote approval request ${request.id.slice(0, 8)}: ${summary}`)

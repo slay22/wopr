@@ -19,6 +19,8 @@ export type ApprovalRequest = {
   runId: string
   /** Unix timestamp when the request was created. */
   timestamp: number
+  /** When the safety judge flagged the command, its reason is escalated here. */
+  judgeReason?: string
 }
 
 /**
@@ -55,18 +57,28 @@ export async function askRemote(
   const priority = "high" as const
   const tags = ["key", "wopr"]
 
+  const messageLines = [
+    `Phase: ${request.phase}`,
+    `Run:   ${request.runId}`,
+    `Command: ${request.command}`,
+  ]
+  // Surface the safety judge's reasoning so the user reviewing on their phone
+  // sees the same warning the interactive TTY prompt would show. Without this,
+  // unattended approvals would happen blind to flagged-risk commands.
+  if (request.judgeReason) {
+    messageLines.push(``, `⚠ Safety judge flagged this command: ${request.judgeReason}`)
+  }
+  messageLines.push(
+    ``,
+    `Reply with:`,
+    `  allow   — allow this once`,
+    `  always  — allow for the rest of this run`,
+    `  reject  — reject (run fails this phase)`,
+  )
+
   await sendNotification(config.topic, {
     title: `🔐 wopr · ${request.agent} wants: ${truncate(request.command, 80)}`,
-    message: [
-      `Phase: ${request.phase}`,
-      `Run:   ${request.runId}`,
-      `Command: ${request.command}`,
-      ``,
-      `Reply with:`,
-      `  allow   — allow this once`,
-      `  always  — allow for the rest of this run`,
-      `  reject  — reject (run fails this phase)`,
-    ].join("\n"),
+    message: messageLines.join("\n"),
     priority,
     tags,
   })

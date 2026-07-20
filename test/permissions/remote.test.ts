@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { parseReply } from "../../src/permissions/remote"
+import { askRemote, parseReply } from "../../src/permissions/remote"
+import type { ApprovalRequest } from "../../src/permissions/remote"
+import type { ApprovalsConfig } from "../../src/types"
 import type { NtfyReply } from "../../src/notifications/inbox"
 
 describe("parseReply", () => {
@@ -100,7 +102,64 @@ describe("parseReply", () => {
 })
 
 describe("askRemote (with mocked network)", () => {
-  // Full integration tests for askRemote would require mocking sendNotification
-  // and readInboxSince. The test file at test/permissions/integration.test.ts
-  // covers the end-to-end flow with mocked fetch.
+  const originalFetch = globalThis.fetch
+  let postBodies: string[] = []
+
+  beforeEach(() => {
+    postBodies = []
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  /** Mocks ntfy: records POST bodies, returns the given inbox feed on GET. */
+  function mockNtfy(inboxFeed: string) {
+    globalThis.fetch = (async (url: RequestInfo | URL, options?: RequestInit) => {
+      const urlStr = String(url)
+      if (options?.method === "POST") {
+        postBodies.push(String(options.body ?? ""))
+        return new Response("ok", { status: 200 })
+      }
+      // GET inbox feed (readInboxSince)
+      if (urlStr.includes("/json?")) return new Response(inboxFeed, { status: 200 })
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+  }
+
+  const topic: ApprovalsConfig["topic"] = { kind: "ntfy", server: "https://ntfy.sh", topic: "wopr-test" }
+  const requestId = "a1b2c3d4-0000-0000-0000-000000000000"
+  const allowFeed = `{"id":"m1","time":1712345678,"event":"message","topic":"wopr-test","message":"allow a1b2c3d4"}`
+
+  function baseRequest(extra: Partial<ApprovalRequest> = {}): ApprovalRequest {
+    return {
+      id: requestId,
+      command: "rm -rf /tmp/foo",
+      agent: "security-auditor",
+      phase: "security",
+      runId: "run-1",
+      timestamp: 1712345670,
+      ...extra,
+    }
+  }
+
+  test("surfaces the safety judge reason in the approval notification", async () => {
+    mockNtfy(allowFeed)
+    const result = await askRemote(
+      baseRequest({ judgeReason: "flagged by safety judge: destructive command" }),
+      { topic, timeoutSeconds: 10, onTimeout: "reject" },
+    )
+    expect(result.decision).toBe("allow-once")
+    expect(postBodies.length).toBe(1)
+    // The same warning the interactive TTY prompt would show must be present.
+    expect(postBodies[0]).toContain("flagged by safety judge: destructive command")
+  }, 15000)
+
+  test("omits the judge warning when the command was not flagged", async () => {
+    mockNtfy(allowFeed)
+    const result = await askRemote(baseRequest(), { topic, timeoutSeconds: 10, onTimeout: "reject" })
+    expect(result.decision).toBe("allow-once")
+    expect(postBodies.length).toBe(1)
+    expect(postBodies[0]).not.toContain("⚠ Safety judge flagged")
+  }, 15000)
 })
