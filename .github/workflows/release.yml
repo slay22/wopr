@@ -19,8 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         target:
+          # darwin-x64 dropped for v0.2.0: cross-compiling from arm64 macos-14
+          # can't resolve the x64 @opentui/core native binary. Add back when
+          # macos-13 runners are available or @opentui/core ships a fat binary.
           - { os: darwin, arch: arm64, runs-on: macos-14 }
-          - { os: darwin, arch: x64, runs-on: macos-14 }
           - { os: linux, arch: x64, runs-on: ubuntu-latest }
           - { os: linux, arch: arm64, runs-on: ubuntu-24.04-arm }
 
@@ -44,26 +46,22 @@ jobs:
       - name: Build binary
         run: |
           mkdir -p dist
-          # For darwin-x64 on a macos-14 (arm64) runner we cross-compile to
-          # x64. @opentui/core ships native binaries for both arm64 and
-          # x64 darwin so the cross-target resolves cleanly.
-          if [ "${{ matrix.target.os }}" = "darwin" ] && [ "${{ matrix.target.arch }}" = "x64" ]; then
-            bun build --compile \
-              --target=bun-darwin-x64 \
-              src/main.ts \
-              --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
-          else
-            bun build --compile \
-              src/main.ts \
-              --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
-          fi
+          bun build --compile \
+            src/main.ts \
+            --outfile dist/wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}
 
       - name: Package
         run: |
           cd dist
           ARCHIVE_NAME="wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}.tar.gz"
           tar -czf "$ARCHIVE_NAME" "wopr-${{ matrix.target.os }}-${{ matrix.target.arch }}"
-          sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          # macOS has shasum but not sha256sum; Linux has both. Try sha256sum
+          # first, fall back to shasum for portability.
+          if command -v sha256sum > /dev/null 2>&1; then
+            sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          else
+            shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
